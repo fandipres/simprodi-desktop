@@ -37,7 +37,7 @@ SIMPRODI Desktop is a Windows desktop toolkit built for administrative staff of 
 
 ## ⚙️ Installation & Setup
 
-**For end users (recommended):** grab `SIMPRODI Desktop.exe` from a build of this repository and double-click it. No installation needed - Windows may show an "unsigned app" warning on first run (click *More info* > *Run anyway*).
+**For end users (recommended):** download `SIMPRODI Desktop.exe` from the [**latest release**](https://github.com/fandipres/simprodi-desktop/releases/latest) and double-click it. No installation needed - Windows may show an "unsigned app" warning on first run (click *More info* > *Run anyway*).
 
 **For development, run from source:**
 
@@ -63,6 +63,7 @@ The full user guide - step-by-step instructions per tool, the SP/DO warning rule
 
 ## 🔗 Links
 
+* **Download:** [Latest Release](https://github.com/fandipres/simprodi-desktop/releases/latest)
 * **Repository:** [github.com/fandipres/simprodi-desktop](https://github.com/fandipres/simprodi-desktop)
 
 ## 📄 License
