@@ -12,6 +12,20 @@ SIMPRODI Desktop is a Windows desktop toolkit built for administrative staff of 
 * **Document Comparison:** Diffs two versions of a Word/PDF document and renders a side-by-side HTML report with word-level highlighting.
 * **Offline & Portable:** Ships as a single standalone `.exe` - no installation, no internet connection required.
 
+## 💻 Application Preview
+
+![Buat Folder Dosen Wali](./previews/01-buat-folder-dosen-wali.png)
+*Batch-create advisor folders from a pasted name list.*
+
+![Proses SP dan DO](./previews/02-proses-sp-dan-do.png)
+*Generate SP/DO warning letters and track escalation across semesters.*
+
+![Pengajuan Peserta Sertifikasi](./previews/03-pengajuan-peserta-sertifikasi.png)
+*Auto-fill the certification-participant PDF form from an Excel roster.*
+
+![Bandingkan Dokumen](./previews/04-bandingkan-dokumen.png)
+*Compare two document versions and highlight the differences.*
+
 ## 🛠️ Tech Stack
 
 * **Language:** Python 3.11+
