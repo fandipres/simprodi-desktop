@@ -1,0 +1,20 @@
+# Data mahasiswa & file kerja tool - sensitif, jangan di-commit.
+# Struktur folder tetap dipertahankan lewat .gitkeep.
+data/**
+!data/**/
+!data/**/.gitkeep
+
+# Hasil build - besar, bisa di-generate ulang dari source (lihat Panduan
+# Pengguna SIMPRODI Desktop.docx bagian 5. Catatan untuk Pengembangan).
+dist/
+build/
+
+# Python
+__pycache__/
+*.pyc
+
+# Dokumen arsip sistem lain (tidak terkait app ini, cuma backup lokal)
+Panduan_Setup_SIMPRODI (arsip - sistem web).docx
+
+# Config lokal tool
+.claude/
