@@ -359,7 +359,7 @@ def _write_ringkasan(ws, courses):
     failing = _failing_students(courses)
     if failing:
         fail_rows = [(f["nim"], f["nama"], f["jumlah_gagal"], f["daftar_gagal"]) for f in failing]
-        _write_table(
+        row = _write_table(
             ws, row,
             ["NIM", "Nama", "Jumlah MK Gagal", "Mata Kuliah yang Gagal"],
             fail_rows,
@@ -368,6 +368,19 @@ def _write_ringkasan(ws, courses):
         )
     else:
         ws.cell(row=row, column=1, value="Tidak ada mahasiswa yang tidak lulus di mata kuliah manapun.")
+        row += 1
+
+    row += 1
+    note = ws.cell(
+        row=row, column=1,
+        value=(
+            "Catatan: data ini belum memperhitungkan nilai remedial, dan belum "
+            "mengecualikan mahasiswa yang sudah keluar/nonaktif di semester "
+            "berikutnya - cek ulang manual untuk kasus-kasus tersebut sebelum "
+            "dipakai sebagai dasar keputusan."
+        ),
+    )
+    note.font = Font(italic=True, color="808080")
 
 
 def main():
