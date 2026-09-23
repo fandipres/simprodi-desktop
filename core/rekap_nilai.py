@@ -437,14 +437,35 @@ def _copy_sheet(src_ws, wb, title):
     return ws
 
 
-def _safe_sheet_name(name, used):
-    name = "".join(ch for ch in name if ch not in r":\/?*[]").strip() or "Mata Kuliah"
-    base = name[:31]
-    candidate = base
+def _course_sheet_name(course, used):
+    """
+    Nama sheet dari mata kuliah + kelas (kalau ada) - PENTING dipakai kelas
+    (bukan nama mata kuliah saja) karena satu mata kuliah bisa punya
+    beberapa kelas paralel (mis. IF-A Pagi, IF-A Sore, IF-B Pagi, dst)
+    waktu beberapa folder data nilai digabung sekaligus - tanpa kelas,
+    sheet-nya cuma kebedakan lewat akhiran " (2)", " (3)" yang tidak
+    informatif.
+
+    Batas nama sheet Excel cuma 31 karakter - kalau nama mata kuliah +
+    kelas kepanjangan, bagian KELAS diprioritaskan tetap utuh (nama mata
+    kuliahnya yang dipotong duluan), supaya tetap bisa dibedakan tanpa
+    perlu buka isi sheet-nya dulu.
+    """
+    name = "".join(ch for ch in course["course_name"] if ch not in r":\/?*[]").strip() or "Mata Kuliah"
+    suffix = f" - {course['kelas']}" if course["kelas"] else ""
+    suffix = "".join(ch for ch in suffix if ch not in r":\/?*[]")[:31]
+
+    def build(n=None):
+        extra = f" ({n})" if n else ""
+        max_name_len = 31 - len(suffix) - len(extra)
+        if max_name_len < 1:
+            return (suffix + extra)[:31] if suffix else (name[:31 - len(extra)] + extra)
+        return name[:max_name_len] + suffix + extra
+
+    candidate = build()
     n = 2
     while candidate.lower() in used:
-        suffix = f" ({n})"
-        candidate = base[: 31 - len(suffix)] + suffix
+        candidate = build(n)
         n += 1
     used.add(candidate.lower())
     return candidate
@@ -457,7 +478,7 @@ def export_excel(courses, output_path, perwalian=None):
 
     used_names = set()
     for course in courses:
-        title = _safe_sheet_name(course["course_name"], used_names)
+        title = _course_sheet_name(course, used_names)
         _copy_sheet(course["worksheet"], wb, title)
 
     _write_ringkasan(ws_ringkasan, courses, perwalian)
@@ -473,7 +494,7 @@ def export_perwalian_excel(roster, courses, output_path):
 
     used_names = set()
     for course in courses:
-        title = _safe_sheet_name(course["course_name"], used_names)
+        title = _course_sheet_name(course, used_names)
         _copy_sheet(course["worksheet"], wb, title)
 
     rows = generate_perwalian_rekap(roster, courses)
@@ -538,7 +559,7 @@ def _write_ringkasan(ws, courses, perwalian=None):
     for course in courses:
         if course["parse_error"]:
             course_rows.append((
-                course["course_name"], course["dosen"] or "",
+                course["course_name"], course["kelas"] or "", course["dosen"] or "",
                 "", "", "", f"Tidak dianalisis - {course['parse_error']}",
             ))
             continue
@@ -548,16 +569,19 @@ def _write_ringkasan(ws, courses, perwalian=None):
         tidak_lulus = dinilai - lulus
         persen = f"{lulus / dinilai * 100:.0f}%" if dinilai else ""
         course_rows.append((
-            course["course_name"], course["dosen"] or "",
+            course["course_name"], course["kelas"] or "", course["dosen"] or "",
             total, lulus, tidak_lulus, persen,
         ))
 
+    # Kolom "Kelas" penting kalau mata kuliah yang sama punya beberapa
+    # kelas paralel (lihat catatan di _course_sheet_name) - tanpa ini, baris
+    # "Mata Kuliah" yang sama berulang tanpa cara membedakan kelasnya.
     row = _write_table(
         ws, row,
-        ["Mata Kuliah", "Dosen", "Jumlah Mahasiswa", "Lulus", "Tidak Lulus", "% Lulus"],
+        ["Mata Kuliah", "Kelas", "Dosen", "Jumlah Mahasiswa", "Lulus", "Tidak Lulus", "% Lulus"],
         course_rows,
-        [30, 30, 16, 10, 12, 24],
-        left_align_cols={1, 2},
+        [30, 16, 30, 16, 10, 12, 24],
+        left_align_cols={1, 2, 3},
     )
 
     row += 2
