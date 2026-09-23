@@ -332,7 +332,7 @@ def _write_ringkasan(ws, courses):
         if course["parse_error"]:
             course_rows.append((
                 course["course_name"], course["dosen"] or "",
-                "", "", "", "", f"Tidak dianalisis - {course['parse_error']}",
+                "", "", "", f"Tidak dianalisis - {course['parse_error']}",
             ))
             continue
         total = len(course["students"])
@@ -342,14 +342,14 @@ def _write_ringkasan(ws, courses):
         persen = f"{lulus / dinilai * 100:.0f}%" if dinilai else ""
         course_rows.append((
             course["course_name"], course["dosen"] or "",
-            total, lulus, tidak_lulus, persen, "",
+            total, lulus, tidak_lulus, persen,
         ))
 
     row = _write_table(
         ws, row,
-        ["Mata Kuliah", "Dosen", "Jumlah Mahasiswa", "Lulus", "Tidak Lulus", "% Lulus", "Catatan"],
+        ["Mata Kuliah", "Dosen", "Jumlah Mahasiswa", "Lulus", "Tidak Lulus", "% Lulus"],
         course_rows,
-        [30, 30, 16, 10, 12, 10, 40],
+        [30, 30, 16, 10, 12, 24],
     )
 
     row += 2
@@ -358,12 +358,15 @@ def _write_ringkasan(ws, courses):
 
     failing = _failing_students(courses)
     if failing:
-        fail_rows = [(f["nim"], f["nama"], f["jumlah_gagal"], f["daftar_gagal"]) for f in failing]
+        # Kolom "Catatan" sengaja dikosongkan - dipakai dosen wali menandai
+        # tindak lanjut per mahasiswa (mis. "sudah dihubungi", "remedial"),
+        # bukan diisi otomatis oleh aplikasi.
+        fail_rows = [(f["nim"], f["nama"], f["jumlah_gagal"], f["daftar_gagal"], "") for f in failing]
         row = _write_table(
             ws, row,
-            ["NIM", "Nama", "Jumlah MK Gagal", "Mata Kuliah yang Gagal"],
+            ["NIM", "Nama", "Jumlah MK Gagal", "Mata Kuliah yang Gagal", "Catatan"],
             fail_rows,
-            [16, 30, 16, 60],
+            [16, 30, 16, 60, 30],
             highlight_rows=set(range(len(fail_rows))),
         )
     else:
