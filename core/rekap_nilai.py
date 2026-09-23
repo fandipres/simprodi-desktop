@@ -492,14 +492,60 @@ def export_perwalian_excel(roster, courses, output_path):
     wb.remove(wb.active)
     ws_ringkasan = wb.create_sheet("Ringkasan", 0)
 
-    used_names = set()
+    # 1 sheet per NAMA mata kuliah (gabungan semua kelas paralel yang
+    # mengajarkannya), BUKAN salinan mentah 1 sheet per kelas seperti
+    # export_excel() - dosen wali cuma perlu tahu status kelulusan tiap
+    # anak walinya, bukan rincian Sub-CPMK; kolom Kelas & Dosen Pengajar
+    # menjaga konteks asal tiap baris tetap kelihatan.
+    by_course_name = {}
     for course in courses:
-        title = _course_sheet_name(course, used_names)
-        _copy_sheet(course["worksheet"], wb, title)
+        by_course_name.setdefault(course["course_name"], []).append(course)
+
+    used_names = set()
+    for course_name in sorted(by_course_name, key=str.lower):
+        _write_course_summary_sheet(wb, course_name, by_course_name[course_name], used_names)
 
     rows = generate_perwalian_rekap(roster, courses)
     _write_perwalian_ringkasan(ws_ringkasan, rows)
     wb.save(output_path)
+
+
+def _write_course_summary_sheet(wb, course_name, course_list, used_names):
+    """1 sheet gabungan untuk 1 nama mata kuliah, isinya mahasiswa dari
+    SEMUA kelas paralel yang mengajarkan mata kuliah itu (bukan salinan
+    mentah format OBE asli) - lihat catatan di export_perwalian_excel()."""
+    title_base = "".join(ch for ch in course_name if ch not in r":\/?*[]").strip() or "Mata Kuliah"
+    base = title_base[:31]
+    title, n = base, 2
+    while title.lower() in used_names:
+        suffix = f" ({n})"
+        title = base[: 31 - len(suffix)] + suffix
+        n += 1
+    used_names.add(title.lower())
+
+    ws = wb.create_sheet(title)
+
+    rows = []
+    for course in course_list:
+        if course["parse_error"]:
+            rows.append((None, None, course["kelas"] or "", course["dosen"] or "",
+                         None, f"Tidak dianalisis - {course['parse_error']}"))
+            continue
+        for s in course["students"]:
+            rows.append((
+                s["nim"], s["nama"], course["kelas"] or "", course["dosen"] or "",
+                s["nilai_huruf"] if s["nilai_huruf"] not in (None, "") else "",
+                s["status"] or "",
+            ))
+    rows.sort(key=lambda r: ((r[2] or ""), (r[0] or "")))
+
+    _write_table(
+        ws, 1,
+        ["NIM", "Nama", "Kelas", "Dosen Pengajar", "Nilai Huruf MK", "Status Kelulusan MK"],
+        rows,
+        [16, 30, 16, 30, 16, 24],
+        left_align_cols={1, 2, 3},
+    )
 
 
 _HEADER_FILL = PatternFill("solid", fgColor="D9D9D9")
