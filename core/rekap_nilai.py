@@ -6,10 +6,12 @@ hasil export sistem akademik) yang diberikan - boleh gabungan beberapa
 folder/semester sekaligus.
 
 Hasilnya 1 file Excel: 1 sheet "Ringkasan" (mahasiswa dikelompokkan per
-dosen wali, yang gagal paling banyak ditaruh duluan), ditambah 1 sheet
-gabungan per NAMA mata kuliah (semua kelas paralel yang mengajarkannya
-digabung jadi 1 sheet, dengan kolom Kelas & Dosen Pengajar supaya konteks
-tiap baris tetap jelas).
+dosen wali lalu per kelas+semester, yang gagal paling banyak ditaruh
+duluan), ditambah 1 sheet gabungan per NAMA mata kuliah (semua kelas
+paralel yang mengajarkannya digabung jadi 1 sheet, rincian nilai APA
+ADANYA seperti file sumbernya - bukan cuma ringkasan status kelulusan -
+dengan kolom Kelas & Dosen Pengajar supaya konteks tiap baris tetap
+jelas).
 
 Tiap mata kuliah boleh beda jumlah Sub-CPMK/kolom penilaian (makanya lebar
 tabel sumbernya beda-beda per file) - kolom yang dibutuhkan (NIM, Nama
@@ -30,6 +32,7 @@ Cara pakai (dari folder ini):
         --output "hasil.xlsx" [--per-dosen "path/ke/folder/output"]
 """
 import argparse
+import copy
 import os
 import re
 
@@ -223,7 +226,19 @@ def _parse_students(grid, nrows, ncols):
         r += 1
     if not students:
         raise ValueError("Tidak ada baris data mahasiswa yang terbaca di bawah header.")
-    return students
+
+    # Batas baris (1-indexed, siap dipakai langsung sebagai nomor baris
+    # openpyxl) buat menyalin blok header & data APA ADANYA - dipakai
+    # _write_course_detail_sheet supaya sheet gabungan tetap menampilkan
+    # rincian Sub-CPMK asli, bukan cuma ringkasan status kelulusan.
+    return {
+        "students": students,
+        "ncols": ncols,
+        "header_start_row": header_row + 1,
+        "header_end_row": data_start,
+        "data_start_row": data_start + 1,
+        "data_end_row": r,
+    }
 
 
 def parse_course_file(path):
@@ -248,14 +263,25 @@ def parse_course_file(path):
 
     result = {
         "source_path": path,
+        "worksheet": ws,
         "course_name": str(course_name).strip(),
         "kelas": str(kelas).strip() if kelas else None,
         "dosen": str(dosen).strip() if dosen else None,
         "students": [],
+        "ncols": ncols,
+        "header_start_row": None,
+        "header_end_row": None,
+        "data_start_row": None,
+        "data_end_row": None,
         "parse_error": None,
     }
     try:
-        result["students"] = _parse_students(grid, nrows, ncols)
+        parsed = _parse_students(grid, nrows, ncols)
+        result["students"] = parsed["students"]
+        result["header_start_row"] = parsed["header_start_row"]
+        result["header_end_row"] = parsed["header_end_row"]
+        result["data_start_row"] = parsed["data_start_row"]
+        result["data_end_row"] = parsed["data_end_row"]
     except ValueError as e:
         result["parse_error"] = str(e)
     return result
@@ -390,17 +416,33 @@ def export_excel(roster, courses, output_path):
         by_course_name.setdefault(course["course_name"], []).append(course)
 
     used_names = set()
+    warnings = []
     for course_name in sorted(by_course_name, key=str.lower):
-        _write_course_summary_sheet(wb, course_name, by_course_name[course_name], used_names)
+        warnings.extend(_write_course_detail_sheet(wb, course_name, by_course_name[course_name], used_names))
 
     rows = generate_perwalian_rekap(roster, courses)
     _write_ringkasan(ws_ringkasan, rows)
     wb.save(output_path)
+    return warnings
 
 
-def _write_course_summary_sheet(wb, course_name, course_list, used_names):
-    """1 sheet gabungan untuk 1 nama mata kuliah, isinya mahasiswa dari
-    SEMUA kelas paralel yang mengajarkan mata kuliah itu."""
+def _write_course_detail_sheet(wb, course_name, course_list, used_names):
+    """
+    1 sheet gabungan untuk 1 nama mata kuliah, isinya rincian nilai APA
+    ADANYA (header & kolom Sub-CPMK asli disalin dari file mentah kelas
+    pertama - bukan cuma ringkasan status kelulusan) dari SEMUA kelas
+    paralel yang mengajarkan mata kuliah itu, ditambah kolom "Kelas" &
+    "Dosen Pengajar" di ujung kanan supaya konteks tiap baris tetap
+    jelas. Asumsinya format kolom penilaian sama persis antar kelas
+    paralel mata kuliah yang sama (biasanya benar, karena satu rubrik
+    penilaian dipakai bersama) - kalau ternyata ada kelas yang jumlah
+    kolomnya beda, datanya tetap disalin (supaya tidak ada yang hilang)
+    tapi dicatat di 'warnings' yang dikembalikan, karena kolomnya
+    mungkin tidak sejajar sempurna dengan kelas lain.
+
+    Kembalikan list pesan warning (string) - kosong kalau semua kelas
+    strukturnya konsisten.
+    """
     title_base = "".join(ch for ch in course_name if ch not in r":\/?*[]").strip() or "Mata Kuliah"
     base = title_base[:31]
     title, n = base, 2
@@ -411,28 +453,89 @@ def _write_course_summary_sheet(wb, course_name, course_list, used_names):
     used_names.add(title.lower())
 
     ws = wb.create_sheet(title)
+    warnings = []
 
-    rows = []
-    for course in course_list:
-        if course["parse_error"]:
-            rows.append((None, None, course["kelas"] or "", course["dosen"] or "",
-                         None, f"Tidak dianalisis - {course['parse_error']}"))
-            continue
-        for s in course["students"]:
-            rows.append((
-                s["nim"], s["nama"], course["kelas"] or "", course["dosen"] or "",
-                s["nilai_huruf"] if s["nilai_huruf"] not in (None, "") else "",
-                s["status"] or "",
-            ))
-    rows.sort(key=lambda r: ((r[2] or ""), (r[0] or "")))
-
-    _write_table(
-        ws, 1,
-        ["NIM", "Nama", "Kelas", "Dosen Pengajar", "Nilai Huruf MK", "Status Kelulusan MK"],
-        rows,
-        [16, 30, 16, 30, 16, 24],
-        left_align_cols={1, 2, 3},
+    valid = sorted(
+        (c for c in course_list if not c["parse_error"]),
+        key=lambda c: (c["kelas"] or "").lower(),
     )
+    unreadable = [c for c in course_list if c["parse_error"]]
+
+    if not valid:
+        ws.cell(row=1, column=1, value=f'Tidak ada data yang bisa dibaca untuk "{course_name}".')
+        for c in unreadable:
+            warnings.append(f"{course_name} ({c['kelas'] or '?'}): {c['parse_error']}")
+        return warnings
+
+    canonical = valid[0]
+    canon_ws = canonical["worksheet"]
+    canon_ncols = canonical["ncols"]
+    header_start, header_end = canonical["header_start_row"], canonical["header_end_row"]
+    header_height = header_end - header_start + 1
+
+    # 1. Salin blok header APA ADANYA (nilai + style + merge cell) dari
+    # kelas pertama, termasuk rincian Sub-CPMK aslinya.
+    for src_row in range(header_start, header_end + 1):
+        dst_row = src_row - header_start + 1
+        for col in range(1, canon_ncols + 1):
+            src_cell = canon_ws.cell(row=src_row, column=col)
+            dst_cell = ws.cell(row=dst_row, column=col, value=src_cell.value)
+            if src_cell.has_style:
+                dst_cell.font = copy.copy(src_cell.font)
+                dst_cell.fill = copy.copy(src_cell.fill)
+                dst_cell.border = copy.copy(src_cell.border)
+                dst_cell.alignment = copy.copy(src_cell.alignment)
+                dst_cell.number_format = src_cell.number_format
+    for merged_range in canon_ws.merged_cells.ranges:
+        if merged_range.min_row >= header_start and merged_range.max_row <= header_end:
+            ws.merge_cells(
+                start_row=merged_range.min_row - header_start + 1,
+                start_column=merged_range.min_col,
+                end_row=merged_range.max_row - header_start + 1,
+                end_column=merged_range.max_col,
+            )
+    for col_letter, dim in canon_ws.column_dimensions.items():
+        if dim.width:
+            ws.column_dimensions[col_letter].width = dim.width
+
+    # 2. Tambah kolom "Kelas" & "Dosen Pengajar" di ujung kanan header asli.
+    kelas_col, dosen_col = canon_ncols + 1, canon_ncols + 2
+    for col, label, width in ((kelas_col, "Kelas", 16), (dosen_col, "Dosen Pengajar", 26)):
+        cell = ws.cell(row=1, column=col, value=label)
+        cell.font = Font(bold=True)
+        cell.fill = _HEADER_FILL
+        cell.border = _BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[get_column_letter(col)].width = width
+        if header_height > 1:
+            ws.merge_cells(start_row=1, start_column=col, end_row=header_height, end_column=col)
+
+    # 3. Salin baris data tiap kelas apa adanya, ditambah nilai Kelas &
+    # Dosen Pengajar di 2 kolom baru.
+    dst_row = header_height + 1
+    for course in valid:
+        if course["ncols"] != canon_ncols:
+            warnings.append(
+                f"{course_name} ({course['kelas'] or '?'}): jumlah kolom beda dari kelas acuan "
+                f"({course['ncols']} vs {canon_ncols}) - kolom mungkin tidak sejajar sempurna."
+            )
+        src_ws = course["worksheet"]
+        for src_row in range(course["data_start_row"], course["data_end_row"] + 1):
+            for col in range(1, canon_ncols + 1):
+                src_cell = src_ws.cell(row=src_row, column=col)
+                dst_cell = ws.cell(row=dst_row, column=col, value=src_cell.value)
+                dst_cell.border = _BORDER
+                dst_cell.alignment = _CENTER
+            for col, value in ((kelas_col, course["kelas"] or ""), (dosen_col, course["dosen"] or "")):
+                cell = ws.cell(row=dst_row, column=col, value=value)
+                cell.border = _BORDER
+                cell.alignment = _CENTER
+            dst_row += 1
+
+    for c in unreadable:
+        warnings.append(f"{course_name} ({c['kelas'] or '?'}): {c['parse_error']} (tidak ikut digabung di sheet detail)")
+
+    return warnings
 
 
 _HEADER_FILL = PatternFill("solid", fgColor="D9D9D9")
@@ -600,7 +703,7 @@ def main():
 
     roster, roster_skipped = load_perwalian_roster(args.perwalian)
     courses, skipped = generate_from_folders(args.folder)
-    export_excel(roster, courses, args.output)
+    warnings = export_excel(roster, courses, args.output)
 
     print(f"Data perwalian terbaca: {len(roster)} mahasiswa")
     for name, msg in roster_skipped:
@@ -611,6 +714,8 @@ def main():
     for c in courses:
         if c["parse_error"]:
             print(f"Tidak dianalisis - {c['course_name']}: {c['parse_error']}")
+    for w in warnings:
+        print(f"Perhatian - {w}")
     print(f"Hasil: {args.output}")
 
     if args.per_dosen:
