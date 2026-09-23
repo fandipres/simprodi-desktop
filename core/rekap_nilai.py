@@ -320,9 +320,17 @@ def generate_perwalian_rekap(roster, courses):
     Mulai dari roster perwalian (bukan dari file nilai) - buat 1 baris per
     mahasiswa di roster, cari nilainya di seluruh 'courses' (hasil
     generate_from_folders(), boleh gabungan banyak folder/semester).
-    Kembalikan list baris terurut: per dosen wali (abjad), lalu di dalam
-    tiap dosen wali - yang gagal >=1 MK dulu (paling banyak gagal duluan),
-    baru yang lulus semua, baru yang datanya belum ketemu sama sekali.
+    Kembalikan list baris terurut: per dosen wali (abjad), lalu per
+    kelompok kelas+semester (satu dosen bisa jadi wali >1 kelompok
+    sekaligus - mis. kelas peminatan di semester lain - jadi tiap
+    kelompoknya tetap dipisah, bukan digabung rata ke 1 dosen; semester
+    WAJIB ikut jadi pembeda, bukan cuma kelas, karena field "Kelas" di
+    PDF-nya sendiri kadang sama persis walau semesternya beda, mis. kelas
+    "IF/B" dipakai baik di semester 5 (AISD-B Sore) maupun semester 7
+    (IF-B Sore) - dua kelompok mahasiswa yang sama sekali beda orangnya),
+    lalu di dalam tiap kelompok - yang gagal >=1 MK dulu (paling banyak
+    gagal duluan), baru yang lulus semua, baru yang datanya belum ketemu
+    sama sekali.
     """
     grades = _grades_by_nim(courses)
 
@@ -339,6 +347,8 @@ def generate_perwalian_rekap(roster, courses):
             daftar_gagal = ", ".join(g["gagal"])
         rows.append({
             "dosen": info["dosen"] or "",
+            "kelas": info["kelas"] or "",
+            "semester": info["semester"] or "",
             "nim": nim,
             "nama": info["nama"],
             "jumlah_ditemukan": jumlah_ditemukan,
@@ -353,7 +363,16 @@ def generate_perwalian_rekap(roster, courses):
             return 1
         return 2
 
-    rows.sort(key=lambda r: (r["dosen"], tier(r), -r["jumlah_gagal"], r["nim"]))
+    def sem_key(r):
+        # Tuple (0, angka) vs (1, teks) - supaya tidak pernah membandingkan
+        # int dengan str langsung kalau semester-nya kosong/bukan angka
+        # (TypeError di Python 3).
+        try:
+            return (0, int(r["semester"]))
+        except (TypeError, ValueError):
+            return (1, r["semester"] or "")
+
+    rows.sort(key=lambda r: (r["dosen"], r["kelas"], sem_key(r), tier(r), -r["jumlah_gagal"], r["nim"]))
     return rows
 
 
@@ -457,16 +476,25 @@ def _write_ringkasan(ws, rows, title="Ringkasan Perwalian", show_dosen_col=True)
 
     if show_dosen_col:
         dosen_set = sorted({r["dosen"] for r in rows if r["dosen"]})
-        ws.cell(row=2, column=1, value=f"Jumlah Dosen Wali: {len(dosen_set)}")
-        ws.cell(row=3, column=1, value=f"Jumlah Mahasiswa (roster perwalian): {len(rows)}")
-        row = 5
-        headers = ["Dosen Wali", "NIM", "Nama", "Jumlah MK Ditemukan", "Jumlah MK Gagal", "Daftar MK Gagal", "Catatan"]
+        kelompok_set = sorted({(r["dosen"], r["kelas"], r["semester"]) for r in rows if r["dosen"]})
+        ws.cell(row=2, column=1, value=f"Jumlah Dosen Wali (unik): {len(dosen_set)}")
+        ws.cell(row=3, column=1, value=f"Jumlah Kelompok Perwalian (dosen+kelas+semester): {len(kelompok_set)}")
+        ws.cell(row=4, column=1, value=f"Jumlah Mahasiswa (roster perwalian): {len(rows)}")
+        row = 6
+        # Kolom "Kelas" & "Semester" penting: satu dosen bisa jadi wali
+        # >1 kelompok sekaligus (mis. kelas peminatan di semester lain) -
+        # dan field "Kelas" di PDF-nya sendiri kadang SAMA PERSIS walau
+        # semesternya beda (mis. "IF/B" dipakai baik di semester 5 maupun
+        # 7, dua kelompok mahasiswa yang sama sekali beda) - tanpa kedua
+        # kolom ini, baris "Dosen Wali" yang sama berulang tanpa cara
+        # membedakan kelompoknya masing-masing.
+        headers = ["Dosen Wali", "Kelas", "Semester", "NIM", "Nama", "Jumlah MK Ditemukan", "Jumlah MK Gagal", "Daftar MK Gagal", "Catatan"]
         table_rows = [
-            (r["dosen"], r["nim"], r["nama"], r["jumlah_ditemukan"], r["jumlah_gagal"], r["daftar_gagal"], "")
+            (r["dosen"], r["kelas"], r["semester"], r["nim"], r["nama"], r["jumlah_ditemukan"], r["jumlah_gagal"], r["daftar_gagal"], "")
             for r in rows
         ]
-        widths = [30, 16, 30, 18, 16, 60, 30]
-        left_cols = {1, 3, 6}
+        widths = [30, 16, 12, 16, 30, 18, 16, 60, 30]
+        left_cols = {1, 2, 5, 8}
     else:
         ws.cell(row=2, column=1, value=f"Jumlah Mahasiswa: {len(rows)}")
         row = 4
@@ -514,24 +542,49 @@ def _safe_filename(name):
 
 def export_per_advisor_excel(roster, courses, output_dir):
     """
-    Tulis 1 file Excel TERPISAH per dosen wali ke output_dir (dibuat kalau
-    belum ada) - tiap file cuma berisi anak wali dosen itu sendiri, siap
-    dikirim langsung ke masing-masing dosen wali. Kembalikan list path file
-    yang berhasil dibuat, terurut nama dosen (abjad).
+    Tulis 1 file Excel TERPISAH per (dosen wali, kelas, semester) ke
+    output_dir (dibuat kalau belum ada) - satu dosen bisa jadi wali lebih
+    dari 1 kelompok sekaligus (mis. kelas peminatan di semester lain),
+    jadi tiap kelompoknya dipecah jadi file sendiri-sendiri (BUKAN
+    digabung rata ke 1 dosen). Semester WAJIB ikut jadi pembeda nama file,
+    bukan cuma kelas, karena field "Kelas" di PDF-nya sendiri kadang sama
+    persis walau semesternya beda (lihat catatan di generate_perwalian_rekap).
+    Kembalikan list path file yang berhasil dibuat, terurut nama dosen,
+    lalu kelas, lalu semester (abjad/numerik).
     """
     rows = generate_perwalian_rekap(roster, courses)
-    by_dosen = {}
+    by_group = {}
     for r in rows:
-        by_dosen.setdefault(r["dosen"] or "(Tanpa Dosen Wali)", []).append(r)
+        key = (r["dosen"] or "(Tanpa Dosen Wali)", r["kelas"] or "(Tanpa Kelas)", r["semester"] or "")
+        by_group.setdefault(key, []).append(r)
+
+    def group_sort_key(k):
+        dosen, kelas, semester = k
+        try:
+            sem_num = (0, int(semester))
+        except (TypeError, ValueError):
+            sem_num = (1, semester)
+        return (dosen.lower(), kelas.lower(), sem_num)
 
     os.makedirs(output_dir, exist_ok=True)
     written = []
-    for dosen in sorted(by_dosen, key=str.lower):
+    used_names = set()
+    for dosen, kelas, semester in sorted(by_group, key=group_sort_key):
         wb = Workbook()
         ws = wb.active
         ws.title = "Ringkasan"
-        _write_ringkasan(ws, by_dosen[dosen], title=f"Rekap Nilai - {dosen}", show_dosen_col=False)
-        path = os.path.join(output_dir, f"Rekap Nilai - {_safe_filename(dosen)}.xlsx")
+        label = f"{dosen} - {kelas} (Semester {semester})" if semester else f"{dosen} - {kelas}"
+        _write_ringkasan(ws, by_group[(dosen, kelas, semester)], title=f"Rekap Nilai - {label}", show_dosen_col=False)
+
+        filename_base = _safe_filename(label)
+        filename = filename_base
+        n = 2
+        while filename.lower() in used_names:
+            filename = f"{filename_base} ({n})"
+            n += 1
+        used_names.add(filename.lower())
+
+        path = os.path.join(output_dir, f"Rekap Nilai - {filename}.xlsx")
         wb.save(path)
         written.append(path)
     return written
