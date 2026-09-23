@@ -23,8 +23,9 @@ catatan di sheet Ringkasan. Kalau file PDF perwalian formatnya tidak
 dikenali, dilewati dengan pesan jelas (tidak menggagalkan yang lain).
 
 Opsional: --per-dosen <folder> sekaligus memecah hasilnya jadi 1 file
-Excel terpisah per dosen wali di folder itu (cuma berisi anak wali dosen
-itu sendiri) - siap dikirim langsung ke masing-masing dosen wali.
+Excel terpisah per dosen wali di folder itu (Ringkasan + sheet detail per
+mata kuliah, sama seperti file gabungan, tapi difilter cuma anak wali
+dosen itu sendiri) - siap dikirim langsung ke masing-masing dosen wali.
 
 Cara pakai (dari folder ini):
     python rekap_nilai.py --perwalian "path/ke/folder/perwalian" \\
@@ -426,7 +427,22 @@ def export_excel(roster, courses, output_path):
     return warnings
 
 
-def _write_course_detail_sheet(wb, course_name, course_list, used_names):
+def _reserve_sheet_title(course_name, used_names):
+    """Nama sheet unik (<=31 char, sesuai batas Excel) buat 1 nama mata
+    kuliah dalam 1 workbook - used_names diisi/dicek per workbook (jangan
+    dipakai bareng lintas file, karena tiap file punya set sheet sendiri)."""
+    title_base = "".join(ch for ch in course_name if ch not in r":\/?*[]").strip() or "Mata Kuliah"
+    base = title_base[:31]
+    title, n = base, 2
+    while title.lower() in used_names:
+        suffix = f" ({n})"
+        title = base[: 31 - len(suffix)] + suffix
+        n += 1
+    used_names.add(title.lower())
+    return title
+
+
+def _write_course_detail_sheet(wb, course_name, course_list, used_names, nim_filter=None):
     """
     1 sheet gabungan untuk 1 nama mata kuliah, isinya rincian nilai APA
     ADANYA (header & kolom Sub-CPMK asli disalin dari file mentah kelas
@@ -440,19 +456,18 @@ def _write_course_detail_sheet(wb, course_name, course_list, used_names):
     tapi dicatat di 'warnings' yang dikembalikan, karena kolomnya
     mungkin tidak sejajar sempurna dengan kelas lain.
 
-    Kembalikan list pesan warning (string) - kosong kalau semua kelas
-    strukturnya konsisten.
-    """
-    title_base = "".join(ch for ch in course_name if ch not in r":\/?*[]").strip() or "Mata Kuliah"
-    base = title_base[:31]
-    title, n = base, 2
-    while title.lower() in used_names:
-        suffix = f" ({n})"
-        title = base[: 31 - len(suffix)] + suffix
-        n += 1
-    used_names.add(title.lower())
+    nim_filter: None berarti sertakan SEMUA baris mahasiswa (dipakai
+    export_excel, file gabungan). Kalau diisi (set NIM), cuma baris
+    mahasiswa yang NIM-nya ada di situ yang disalin, dan sheet-nya SAMA
+    SEKALI TIDAK DIBUAT kalau tidak ada satu pun mahasiswa yang cocok
+    (dipakai export_per_advisor_excel, supaya file 1 dosen wali cuma
+    berisi anak wali dosen itu sendiri - bukan seisi 1 kelas penuh - dan
+    tidak dipenuhi sheet kosong buat mata kuliah yang tidak relevan).
 
-    ws = wb.create_sheet(title)
+    Kembalikan list pesan warning (string) - kosong kalau semua kelas
+    strukturnya konsisten (atau kalau nim_filter membuat sheet ini tidak
+    dibuat sama sekali).
+    """
     warnings = []
 
     valid = sorted(
@@ -460,6 +475,14 @@ def _write_course_detail_sheet(wb, course_name, course_list, used_names):
         key=lambda c: (c["kelas"] or "").lower(),
     )
     unreadable = [c for c in course_list if c["parse_error"]]
+
+    if nim_filter is not None:
+        valid = [c for c in valid if any(s["nim"] in nim_filter for s in c["students"])]
+        if not valid:
+            return warnings
+
+    title = _reserve_sheet_title(course_name, used_names)
+    ws = wb.create_sheet(title)
 
     if not valid:
         ws.cell(row=1, column=1, value=f'Tidak ada data yang bisa dibaca untuk "{course_name}".')
@@ -520,7 +543,10 @@ def _write_course_detail_sheet(wb, course_name, course_list, used_names):
                 f"({course['ncols']} vs {canon_ncols}) - kolom mungkin tidak sejajar sempurna."
             )
         src_ws = course["worksheet"]
-        for src_row in range(course["data_start_row"], course["data_end_row"] + 1):
+        src_rows = range(course["data_start_row"], course["data_end_row"] + 1)
+        for student, src_row in zip(course["students"], src_rows):
+            if nim_filter is not None and student["nim"] not in nim_filter:
+                continue
             for col in range(1, canon_ncols + 1):
                 src_cell = src_ws.cell(row=src_row, column=col)
                 dst_cell = ws.cell(row=dst_row, column=col, value=src_cell.value)
@@ -652,8 +678,20 @@ def export_per_advisor_excel(roster, courses, output_dir):
     digabung rata ke 1 dosen). Semester WAJIB ikut jadi pembeda nama file,
     bukan cuma kelas, karena field "Kelas" di PDF-nya sendiri kadang sama
     persis walau semesternya beda (lihat catatan di generate_perwalian_rekap).
-    Kembalikan list path file yang berhasil dibuat, terurut nama dosen,
-    lalu kelas, lalu semester (abjad/numerik).
+
+    Sama seperti file gabungan (export_excel), tiap file juga dapat sheet
+    "Ringkasan" + 1 sheet gabungan per nama mata kuliah berisi rincian
+    nilai lengkap - bedanya di sini datanya DIFILTER: cuma baris anak wali
+    dosen itu sendiri di kelompok itu yang disalin, dan mata kuliah yang
+    tidak ada satu pun anak walinya di situ tidak dapat sheet sama sekali
+    (supaya filenya tetap ringkas dan tidak bocor data mahasiswa dosen
+    wali lain).
+
+    Kembalikan (written, warnings): written = list path file yang
+    berhasil dibuat, terurut nama dosen lalu kelas lalu semester
+    (abjad/numerik); warnings = list pesan (string, sudah ditandai nama
+    kelompoknya) soal ketidakcocokan kolom antar kelas paralel - sama
+    makna dengan warnings dari export_excel.
     """
     rows = generate_perwalian_rekap(roster, courses)
     by_group = {}
@@ -669,28 +707,43 @@ def export_per_advisor_excel(roster, courses, output_dir):
             sem_num = (1, semester)
         return (dosen.lower(), kelas.lower(), sem_num)
 
+    by_course_name = {}
+    for course in courses:
+        by_course_name.setdefault(course["course_name"], []).append(course)
+
     os.makedirs(output_dir, exist_ok=True)
     written = []
-    used_names = set()
+    all_warnings = []
+    used_filenames = set()
     for dosen, kelas, semester in sorted(by_group, key=group_sort_key):
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Ringkasan"
+        group_rows = by_group[(dosen, kelas, semester)]
         label = f"{dosen} - {kelas} (Semester {semester})" if semester else f"{dosen} - {kelas}"
-        _write_ringkasan(ws, by_group[(dosen, kelas, semester)], title=f"Rekap Nilai - {label}", show_dosen_col=False)
+
+        wb = Workbook()
+        wb.remove(wb.active)
+        ws_ringkasan = wb.create_sheet("Ringkasan", 0)
+        _write_ringkasan(ws_ringkasan, group_rows, title=f"Rekap Nilai - {label}", show_dosen_col=False)
+
+        nim_filter = {r["nim"] for r in group_rows}
+        used_sheet_names = set()
+        for course_name in sorted(by_course_name, key=str.lower):
+            warnings = _write_course_detail_sheet(
+                wb, course_name, by_course_name[course_name], used_sheet_names, nim_filter=nim_filter
+            )
+            all_warnings.extend(f"[{label}] {w}" for w in warnings)
 
         filename_base = _safe_filename(label)
         filename = filename_base
         n = 2
-        while filename.lower() in used_names:
+        while filename.lower() in used_filenames:
             filename = f"{filename_base} ({n})"
             n += 1
-        used_names.add(filename.lower())
+        used_filenames.add(filename.lower())
 
         path = os.path.join(output_dir, f"Rekap Nilai - {filename}.xlsx")
         wb.save(path)
         written.append(path)
-    return written
+    return written, all_warnings
 
 
 def main():
@@ -719,7 +772,9 @@ def main():
     print(f"Hasil: {args.output}")
 
     if args.per_dosen:
-        written = export_per_advisor_excel(roster, courses, args.per_dosen)
+        written, split_warnings = export_per_advisor_excel(roster, courses, args.per_dosen)
+        for w in split_warnings:
+            print(f"Perhatian - {w}")
         print(f"Dipecah jadi {len(written)} file per dosen wali di: {args.per_dosen}")
 
 

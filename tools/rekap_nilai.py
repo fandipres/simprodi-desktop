@@ -183,13 +183,13 @@ def build_frame(parent):
             roster, roster_skipped = core.load_perwalian_roster(perwalian_path)
             courses, skipped = core.generate_from_folders(folders)
             detail_warnings = core.export_excel(roster, courses, output_path)
-            split_files, split_dir = [], None
+            split_files, split_dir, split_warnings = [], None, []
             if split:
                 split_dir = _split_folder_for(output_path)
-                split_files = core.export_per_advisor_excel(roster, courses, split_dir)
+                split_files, split_warnings = core.export_per_advisor_excel(roster, courses, split_dir)
             result_queue.put((
                 "ok", roster, roster_skipped, courses, skipped, detail_warnings,
-                output_path, split_files, split_dir,
+                output_path, split_files, split_dir, split_warnings,
             ))
         except Exception as e:
             result_queue.put(("error", str(e)))
@@ -204,7 +204,7 @@ def build_frame(parent):
         process_btn.configure(state="normal")
         if item[0] == "ok":
             (_, roster, roster_skipped, courses, skipped, detail_warnings,
-             output_path, split_files, split_dir) = item
+             output_path, split_files, split_dir, split_warnings) = item
             log(f"Data perwalian terbaca: {len(roster)} mahasiswa")
             for name, msg in roster_skipped:
                 log(f"  Dilewati (perwalian) - {name}: {msg}")
@@ -220,6 +220,8 @@ def build_frame(parent):
             open_file_btn.grid(row=0, column=0, padx=(0, 8))
             if split_files:
                 log(f"Dipecah jadi {len(split_files)} file per dosen wali di: {split_dir}")
+                for w in split_warnings:
+                    log(f"  Perhatian - {w}")
                 open_split_folder_dir["value"] = split_dir
                 open_split_folder_btn.grid(row=0, column=1)
             else:
