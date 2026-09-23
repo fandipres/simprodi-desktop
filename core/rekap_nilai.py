@@ -294,8 +294,12 @@ _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 _CENTER = Alignment(horizontal="center")
 
 
-def _write_table(ws, start_row, headers, rows, col_widths, highlight_rows=None):
+_LEFT = Alignment(horizontal="left")
+
+
+def _write_table(ws, start_row, headers, rows, col_widths, highlight_rows=None, left_align_cols=None):
     highlight_rows = highlight_rows or set()
+    left_align_cols = left_align_cols or set()
     for c, header in enumerate(headers, start=1):
         cell = ws.cell(row=start_row, column=c, value=header)
         cell.font = Font(bold=True)
@@ -307,7 +311,7 @@ def _write_table(ws, start_row, headers, rows, col_widths, highlight_rows=None):
         for c, value in enumerate(row, start=1):
             cell = ws.cell(row=r, column=c, value=value)
             cell.border = _BORDER
-            cell.alignment = _CENTER
+            cell.alignment = _LEFT if c in left_align_cols else _CENTER
             if i in highlight_rows:
                 cell.fill = _FAIL_FILL
     for c, width in enumerate(col_widths, start=1):
@@ -350,6 +354,7 @@ def _write_ringkasan(ws, courses):
         ["Mata Kuliah", "Dosen", "Jumlah Mahasiswa", "Lulus", "Tidak Lulus", "% Lulus"],
         course_rows,
         [30, 30, 16, 10, 12, 24],
+        left_align_cols={1, 2},
     )
 
     row += 2
@@ -368,6 +373,7 @@ def _write_ringkasan(ws, courses):
             fail_rows,
             [16, 30, 16, 60, 30],
             highlight_rows=set(range(len(fail_rows))),
+            left_align_cols={2, 4},
         )
     else:
         ws.cell(row=row, column=1, value="Tidak ada mahasiswa yang tidak lulus di mata kuliah manapun.")
