@@ -18,9 +18,8 @@ NAME = "Rekap Nilai"
 LABEL = "Rekap Nilai"
 ICON = "\U0001F4CA"  # 📊
 DESCRIPTION = (
-    "Gabungkan file nilai per mata kuliah jadi 1 file - satu sheet per mata "
-    "kuliah, plus sheet Ringkasan berisi rekap kelulusan dan daftar "
-    "mahasiswa yang tidak lulus."
+    "Gabungkan file nilai per mata kuliah jadi 1 file, plus sheet Ringkasan "
+    "berisi rekap kelulusan dan daftar mahasiswa tidak lulus per dosen wali."
 )
 
 
@@ -55,6 +54,24 @@ def build_frame(parent):
         row=2, column=2, pady=6
     )
 
+    perwalian_dir = data_dir("rekap-nilai", "perwalian")
+    perwalian_var = tk.StringVar()
+
+    def pick_perwalian():
+        path = filedialog.askdirectory(
+            title="Pilih folder data perwalian (PDF)", initialdir=perwalian_dir
+        )
+        if path:
+            perwalian_var.set(path)
+
+    ttk.Label(frame, text="Folder Data Perwalian (Opsional)").grid(row=3, column=0, sticky="w", pady=6)
+    ttk.Entry(frame, textvariable=perwalian_var, width=52, state="readonly").grid(
+        row=3, column=1, sticky="we", padx=10, pady=6
+    )
+    ttk.Button(frame, text="Pilih Folder...", style="Secondary.TButton", command=pick_perwalian).grid(
+        row=3, column=2, pady=6
+    )
+
     output_var = tk.StringVar()
     output_is_auto = {"value": True}
 
@@ -73,30 +90,30 @@ def build_frame(parent):
             output_var.set(path)
             output_is_auto["value"] = False
 
-    ttk.Label(frame, text="Simpan Hasil Sebagai").grid(row=3, column=0, sticky="w", pady=6)
+    ttk.Label(frame, text="Simpan Hasil Sebagai").grid(row=4, column=0, sticky="w", pady=6)
     output_entry = ttk.Entry(frame, textvariable=output_var, width=52)
-    output_entry.grid(row=3, column=1, sticky="we", padx=10, pady=6)
+    output_entry.grid(row=4, column=1, sticky="we", padx=10, pady=6)
     output_entry.bind("<Key>", lambda e: output_is_auto.__setitem__("value", False))
     ttk.Button(frame, text="Pilih...", style="Secondary.TButton", command=pick_output).grid(
-        row=3, column=2, pady=6
+        row=4, column=2, pady=6
     )
 
     frame.columnconfigure(1, weight=1)
 
     process_btn = ttk.Button(frame, text="Proses")
-    process_btn.grid(row=4, column=0, columnspan=3, pady=(18, 8), sticky="w")
+    process_btn.grid(row=5, column=0, columnspan=3, pady=(18, 8), sticky="w")
 
     result_row = ttk.Frame(frame)
-    result_row.grid(row=5, column=0, columnspan=3, sticky="w")
+    result_row.grid(row=6, column=0, columnspan=3, sticky="w")
     open_file_btn = ttk.Button(result_row, text="Buka File Hasil", style="Secondary.TButton")
 
     ttk.Label(frame, text="Log", foreground=theme.TEXT_MUTED, font=(theme.FONT_FAMILY, 9, "bold")).grid(
-        row=6, column=0, sticky="w", pady=(14, 4)
+        row=7, column=0, sticky="w", pady=(14, 4)
     )
     log_text = tk.Text(frame, height=10, width=90, state="disabled", wrap="word")
     theme.style_text_widget(log_text, focus_border=False)
-    log_text.grid(row=7, column=0, columnspan=3, sticky="nsew")
-    frame.rowconfigure(7, weight=1)
+    log_text.grid(row=8, column=0, columnspan=3, sticky="nsew")
+    frame.rowconfigure(8, weight=1)
 
     def log(msg):
         log_text.configure(state="normal")
@@ -106,11 +123,14 @@ def build_frame(parent):
 
     result_queue = queue.Queue()
 
-    def run_worker(folder_path, output_path):
+    def run_worker(folder_path, perwalian_path, output_path):
         try:
             courses, skipped = core.generate(folder_path)
-            core.export_excel(courses, output_path)
-            result_queue.put(("ok", courses, skipped, output_path))
+            perwalian, perwalian_skipped = None, []
+            if perwalian_path:
+                perwalian, perwalian_skipped = core.load_perwalian(perwalian_path)
+            core.export_excel(courses, output_path, perwalian)
+            result_queue.put(("ok", courses, skipped, perwalian, perwalian_skipped, output_path))
         except Exception as e:
             result_queue.put(("error", str(e)))
 
@@ -123,13 +143,17 @@ def build_frame(parent):
 
         process_btn.configure(state="normal")
         if item[0] == "ok":
-            _, courses, skipped, output_path = item
+            _, courses, skipped, perwalian, perwalian_skipped, output_path = item
             log(f"Mata kuliah tergabung ({len(courses)}): {', '.join(c['course_name'] for c in courses)}")
             for name, msg in skipped:
                 log(f"  Dilewati (gagal dibuka) - {name}: {msg}")
             for c in courses:
                 if c["parse_error"]:
                     log(f"  Tidak dianalisis di Ringkasan - {c['course_name']}: {c['parse_error']}")
+            if perwalian is not None:
+                log(f"Data perwalian terbaca: {len(perwalian)} mahasiswa")
+                for name, msg in perwalian_skipped:
+                    log(f"  Dilewati (perwalian) - {name}: {msg}")
             log(f"Tersimpan di: {output_path}")
             open_file_btn.grid(row=0, column=0)
         else:
@@ -138,6 +162,7 @@ def build_frame(parent):
 
     def start_process():
         folder_path = folder_var.get().strip()
+        perwalian_path = perwalian_var.get().strip()
         output_path = output_var.get().strip()
 
         if not folder_path:
@@ -151,7 +176,7 @@ def build_frame(parent):
         process_btn.configure(state="disabled")
         log("Memproses...")
         threading.Thread(
-            target=run_worker, args=(folder_path, output_path), daemon=True
+            target=run_worker, args=(folder_path, perwalian_path, output_path), daemon=True
         ).start()
         frame.after(100, poll_queue)
 
