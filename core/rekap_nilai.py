@@ -20,10 +20,14 @@ mata kuliah itu dianggap belum ada datanya (bukan dianggap lulus) - lihat
 catatan di sheet Ringkasan. Kalau file PDF perwalian formatnya tidak
 dikenali, dilewati dengan pesan jelas (tidak menggagalkan yang lain).
 
+Opsional: --per-dosen <folder> sekaligus memecah hasilnya jadi 1 file
+Excel terpisah per dosen wali di folder itu (cuma berisi anak wali dosen
+itu sendiri) - siap dikirim langsung ke masing-masing dosen wali.
+
 Cara pakai (dari folder ini):
-    python rekap_perwalian.py --perwalian "path/ke/folder/perwalian" \\
+    python rekap_nilai.py --perwalian "path/ke/folder/perwalian" \\
         --folder "path/ke/folder/nilai1" "path/ke/folder/nilai2" \\
-        --output "hasil.xlsx"
+        --output "hasil.xlsx" [--per-dosen "path/ke/folder/output"]
 """
 import argparse
 import os
@@ -445,21 +449,38 @@ def _write_table(ws, start_row, headers, rows, col_widths, left_align_cols=None,
     return start_row + 1 + len(rows)
 
 
-def _write_ringkasan(ws, rows):
-    ws.cell(row=1, column=1, value="Ringkasan Perwalian").font = Font(bold=True, size=14)
+def _write_ringkasan(ws, rows, title="Ringkasan Perwalian", show_dosen_col=True):
+    """show_dosen_col=False dipakai buat file per-dosen-wali terpisah (lihat
+    export_per_advisor_excel) - kolom "Dosen Wali" jadi mubazir kalau
+    seisi file memang cuma anak wali 1 dosen itu saja."""
+    ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=14)
 
-    dosen_set = sorted({r["dosen"] for r in rows if r["dosen"]})
-    ws.cell(row=2, column=1, value=f"Jumlah Dosen Wali: {len(dosen_set)}")
-    ws.cell(row=3, column=1, value=f"Jumlah Mahasiswa (roster perwalian): {len(rows)}")
+    if show_dosen_col:
+        dosen_set = sorted({r["dosen"] for r in rows if r["dosen"]})
+        ws.cell(row=2, column=1, value=f"Jumlah Dosen Wali: {len(dosen_set)}")
+        ws.cell(row=3, column=1, value=f"Jumlah Mahasiswa (roster perwalian): {len(rows)}")
+        row = 5
+        headers = ["Dosen Wali", "NIM", "Nama", "Jumlah MK Ditemukan", "Jumlah MK Gagal", "Daftar MK Gagal", "Catatan"]
+        table_rows = [
+            (r["dosen"], r["nim"], r["nama"], r["jumlah_ditemukan"], r["jumlah_gagal"], r["daftar_gagal"], "")
+            for r in rows
+        ]
+        widths = [30, 16, 30, 18, 16, 60, 30]
+        left_cols = {1, 3, 6}
+    else:
+        ws.cell(row=2, column=1, value=f"Jumlah Mahasiswa: {len(rows)}")
+        row = 4
+        headers = ["NIM", "Nama", "Jumlah MK Ditemukan", "Jumlah MK Gagal", "Daftar MK Gagal", "Catatan"]
+        table_rows = [
+            (r["nim"], r["nama"], r["jumlah_ditemukan"], r["jumlah_gagal"], r["daftar_gagal"], "")
+            for r in rows
+        ]
+        widths = [16, 30, 18, 16, 60, 30]
+        left_cols = {1, 4}
 
-    row = 5
     # Kolom "Catatan" sengaja dikosongkan - dipakai dosen wali menandai
     # tindak lanjut per mahasiswa (mis. "sudah dihubungi", "remedial"),
     # bukan diisi otomatis oleh aplikasi.
-    table_rows = [
-        (r["dosen"], r["nim"], r["nama"], r["jumlah_ditemukan"], r["jumlah_gagal"], r["daftar_gagal"], "")
-        for r in rows
-    ]
     row_fills = {}
     for i, r in enumerate(rows):
         if r["jumlah_gagal"] > 0:
@@ -467,14 +488,7 @@ def _write_ringkasan(ws, rows):
         elif r["jumlah_ditemukan"] == 0:
             row_fills[i] = _NODATA_FILL
 
-    row = _write_table(
-        ws, row,
-        ["Dosen Wali", "NIM", "Nama", "Jumlah MK Ditemukan", "Jumlah MK Gagal", "Daftar MK Gagal", "Catatan"],
-        table_rows,
-        [30, 16, 30, 18, 16, 60, 30],
-        left_align_cols={1, 3, 6},
-        row_fills=row_fills,
-    )
+    row = _write_table(ws, row, headers, table_rows, widths, left_align_cols=left_cols, row_fills=row_fills)
 
     row += 1
     note = ws.cell(
@@ -493,11 +507,42 @@ def _write_ringkasan(ws, rows):
     note.font = Font(italic=True, color="808080")
 
 
+def _safe_filename(name):
+    name = "".join(ch for ch in (name or "").strip() if ch not in '\\/:*?"<>|').strip()
+    return name or "Tanpa Dosen Wali"
+
+
+def export_per_advisor_excel(roster, courses, output_dir):
+    """
+    Tulis 1 file Excel TERPISAH per dosen wali ke output_dir (dibuat kalau
+    belum ada) - tiap file cuma berisi anak wali dosen itu sendiri, siap
+    dikirim langsung ke masing-masing dosen wali. Kembalikan list path file
+    yang berhasil dibuat, terurut nama dosen (abjad).
+    """
+    rows = generate_perwalian_rekap(roster, courses)
+    by_dosen = {}
+    for r in rows:
+        by_dosen.setdefault(r["dosen"] or "(Tanpa Dosen Wali)", []).append(r)
+
+    os.makedirs(output_dir, exist_ok=True)
+    written = []
+    for dosen in sorted(by_dosen, key=str.lower):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Ringkasan"
+        _write_ringkasan(ws, by_dosen[dosen], title=f"Rekap Nilai - {dosen}", show_dosen_col=False)
+        path = os.path.join(output_dir, f"Rekap Nilai - {_safe_filename(dosen)}.xlsx")
+        wb.save(path)
+        written.append(path)
+    return written
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--perwalian", required=True, help="Folder berisi PDF data perwalian")
     parser.add_argument("--folder", nargs="+", required=True, help="Satu atau lebih folder berisi file Excel nilai per mata kuliah")
     parser.add_argument("--output", required=True, help="Path file Excel hasil")
+    parser.add_argument("--per-dosen", help="Folder tujuan - kalau diisi, pecah juga hasilnya jadi 1 file per dosen wali")
     args = parser.parse_args()
 
     roster, roster_skipped = load_perwalian_roster(args.perwalian)
@@ -514,6 +559,10 @@ def main():
         if c["parse_error"]:
             print(f"Tidak dianalisis - {c['course_name']}: {c['parse_error']}")
     print(f"Hasil: {args.output}")
+
+    if args.per_dosen:
+        written = export_per_advisor_excel(roster, courses, args.per_dosen)
+        print(f"Dipecah jadi {len(written)} file per dosen wali di: {args.per_dosen}")
 
 
 if __name__ == "__main__":

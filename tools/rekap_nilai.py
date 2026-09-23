@@ -1,11 +1,13 @@
 """
-Tool UI: Rekap Perwalian.
+Tool UI: Rekap Nilai.
 Wrapper Tkinter di sekitar fungsi load_perwalian_roster()/
-generate_from_folders()/export_excel() dari core/rekap_perwalian.py.
+generate_from_folders()/export_excel()/export_per_advisor_excel() dari
+core/rekap_nilai.py.
 
 Mulai dari roster perwalian (semua anak wali tiap dosen), lalu nilainya
 dicari di seluruh folder data nilai yang dipilih (boleh lebih dari 1
-folder/semester sekaligus) kalau ada.
+folder/semester sekaligus) kalau ada. Bisa juga sekalian dipecah jadi 1
+file terpisah per dosen wali, siap dikirim langsung ke masing-masing.
 """
 
 import os
@@ -14,12 +16,12 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from core import rekap_perwalian as core
+from core import rekap_nilai as core
 from tools import theme
 from tools.common import data_dir
 
-NAME = "Rekap Perwalian"
-LABEL = "Rekap Perwalian"
+NAME = "Rekap Nilai"
+LABEL = "Rekap Nilai"
 ICON = "\U0001F465"  # 👥
 DESCRIPTION = (
     "Bikin rekap nilai per dosen wali mulai dari roster perwalian - nilai "
@@ -119,7 +121,7 @@ def build_frame(parent):
     def pick_output():
         initial = output_var.get()
         initialdir = os.path.dirname(initial) if initial else rekap_dir
-        initialfile = os.path.basename(initial) if initial else "Rekap Perwalian.xlsx"
+        initialfile = os.path.basename(initial) if initial else "Rekap Nilai.xlsx"
         path = filedialog.asksaveasfilename(
             title="Simpan hasil sebagai",
             defaultextension=".xlsx",
@@ -139,22 +141,29 @@ def build_frame(parent):
         row=5, column=2, pady=6
     )
 
+    split_var = tk.BooleanVar(value=False)
+    ttk.Checkbutton(
+        frame, variable=split_var,
+        text="Pecah juga per dosen wali (1 file terpisah per dosen, siap dikirim)",
+    ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(0, 6))
+
     frame.columnconfigure(1, weight=1)
 
     process_btn = ttk.Button(frame, text="Proses")
-    process_btn.grid(row=6, column=0, columnspan=3, pady=(18, 8), sticky="w")
+    process_btn.grid(row=7, column=0, columnspan=3, pady=(18, 8), sticky="w")
 
     result_row = ttk.Frame(frame)
-    result_row.grid(row=7, column=0, columnspan=3, sticky="w")
+    result_row.grid(row=8, column=0, columnspan=3, sticky="w")
     open_file_btn = ttk.Button(result_row, text="Buka File Hasil", style="Secondary.TButton")
+    open_split_folder_btn = ttk.Button(result_row, text="Buka Folder Per Dosen Wali", style="Secondary.TButton")
 
     ttk.Label(frame, text="Log", foreground=theme.TEXT_MUTED, font=(theme.FONT_FAMILY, 9, "bold")).grid(
-        row=8, column=0, sticky="w", pady=(14, 4)
+        row=9, column=0, sticky="w", pady=(14, 4)
     )
     log_text = tk.Text(frame, height=10, width=90, state="disabled", wrap="word")
     theme.style_text_widget(log_text, focus_border=False)
-    log_text.grid(row=9, column=0, columnspan=3, sticky="nsew")
-    frame.rowconfigure(9, weight=1)
+    log_text.grid(row=10, column=0, columnspan=3, sticky="nsew")
+    frame.rowconfigure(10, weight=1)
 
     def log(msg):
         log_text.configure(state="normal")
@@ -164,12 +173,21 @@ def build_frame(parent):
 
     result_queue = queue.Queue()
 
-    def run_worker(perwalian_path, folders, output_path):
+    def _split_folder_for(output_path):
+        out_dir = os.path.dirname(output_path)
+        base = os.path.splitext(os.path.basename(output_path))[0]
+        return os.path.join(out_dir, f"{base} - Per Dosen Wali")
+
+    def run_worker(perwalian_path, folders, output_path, split):
         try:
             roster, roster_skipped = core.load_perwalian_roster(perwalian_path)
             courses, skipped = core.generate_from_folders(folders)
             core.export_excel(roster, courses, output_path)
-            result_queue.put(("ok", roster, roster_skipped, courses, skipped, output_path))
+            split_files, split_dir = [], None
+            if split:
+                split_dir = _split_folder_for(output_path)
+                split_files = core.export_per_advisor_excel(roster, courses, split_dir)
+            result_queue.put(("ok", roster, roster_skipped, courses, skipped, output_path, split_files, split_dir))
         except Exception as e:
             result_queue.put(("error", str(e)))
 
@@ -182,7 +200,7 @@ def build_frame(parent):
 
         process_btn.configure(state="normal")
         if item[0] == "ok":
-            _, roster, roster_skipped, courses, skipped, output_path = item
+            _, roster, roster_skipped, courses, skipped, output_path, split_files, split_dir = item
             log(f"Data perwalian terbaca: {len(roster)} mahasiswa")
             for name, msg in roster_skipped:
                 log(f"  Dilewati (perwalian) - {name}: {msg}")
@@ -193,15 +211,24 @@ def build_frame(parent):
                 if c["parse_error"]:
                     log(f"  Tidak dianalisis - {c['course_name']}: {c['parse_error']}")
             log(f"Tersimpan di: {output_path}")
-            open_file_btn.grid(row=0, column=0)
+            open_file_btn.grid(row=0, column=0, padx=(0, 8))
+            if split_files:
+                log(f"Dipecah jadi {len(split_files)} file per dosen wali di: {split_dir}")
+                open_split_folder_dir["value"] = split_dir
+                open_split_folder_btn.grid(row=0, column=1)
+            else:
+                open_split_folder_btn.grid_remove()
         else:
             log(f"Gagal: {item[1]}")
             messagebox.showerror("Gagal memproses", item[1])
+
+    open_split_folder_dir = {"value": None}
 
     def start_process():
         perwalian_path = perwalian_var.get().strip()
         folders = list(nilai_folders)
         output_path = output_var.get().strip()
+        split = split_var.get()
 
         if not perwalian_path:
             messagebox.showwarning("Belum lengkap", "Pilih folder data perwalian terlebih dahulu.")
@@ -214,14 +241,16 @@ def build_frame(parent):
             return
 
         open_file_btn.grid_remove()
+        open_split_folder_btn.grid_remove()
         process_btn.configure(state="disabled")
         log("Memproses...")
         threading.Thread(
-            target=run_worker, args=(perwalian_path, folders, output_path), daemon=True
+            target=run_worker, args=(perwalian_path, folders, output_path, split), daemon=True
         ).start()
         frame.after(100, poll_queue)
 
     process_btn.configure(command=start_process)
     open_file_btn.configure(command=lambda: os.startfile(output_var.get()))
+    open_split_folder_btn.configure(command=lambda: os.startfile(open_split_folder_dir["value"]))
 
     return frame
