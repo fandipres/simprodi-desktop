@@ -60,16 +60,18 @@ def scan_pdf_folder(folder_path):
 
 
 _DOSEN_WALI_RE = re.compile(r"Dosen Penasihat Akademik\s*\n\s*:\s*([^\n]+)")
+_KELAS_RE = re.compile(r"Kelas\s*\n\s*:\s*([^\n]+)")
+_SEMESTER_RE = re.compile(r"Semester\s*\n\s*:\s*([^\n]+)")
 _PERWALIAN_ROW_RE = re.compile(r"(\d+)\.\s*\n\s*(\d{6,10})\s*\n\s*([^\n]+)")
 
 
 def _parse_perwalian_pdf(path):
     """
     Baca 1 PDF "Daftar Hadir Mahasiswa Pembimbingan Akademik" (form
-    FM-FKT-02-01) - kembalikan (nama_dosen, {nim: nama_mahasiswa}). Raise
-    ValueError kalau markah yang dibutuhkan (baris "Dosen Penasihat
-    Akademik : ..." atau baris NIM mahasiswa) tidak ditemukan - dianggap
-    bukan format ini.
+    FM-FKT-02-01) - kembalikan dict {dosen, kelas, semester, students}
+    (students = {nim: nama_mahasiswa}). Raise ValueError kalau markah yang
+    dibutuhkan (baris "Dosen Penasihat Akademik : ..." atau baris NIM
+    mahasiswa) tidak ditemukan - dianggap bukan format ini.
     """
     doc = fitz.open(path)
     text = "\n".join(page.get_text() for page in doc)
@@ -84,8 +86,16 @@ def _parse_perwalian_pdf(path):
     if not rows:
         raise ValueError("Tidak ada baris NIM mahasiswa yang terbaca.")
 
+    kelas_matches = _KELAS_RE.findall(text)
+    sem_matches = _SEMESTER_RE.findall(text)
+
     students = {nim.strip(): nama.strip() for _, nim, nama in rows}
-    return dosen, students
+    return {
+        "dosen": dosen,
+        "kelas": kelas_matches[0].strip() if kelas_matches else None,
+        "semester": sem_matches[0].strip() if sem_matches else None,
+        "students": students,
+    }
 
 
 def load_perwalian(folder_path):
@@ -98,13 +108,38 @@ def load_perwalian(folder_path):
     mapping, skipped = {}, []
     for path in scan_pdf_folder(folder_path):
         try:
-            dosen, students = _parse_perwalian_pdf(path)
+            info = _parse_perwalian_pdf(path)
         except Exception as e:
             skipped.append((os.path.basename(path), str(e)))
             continue
-        for nim in students:
-            mapping[nim] = dosen
+        for nim in info["students"]:
+            mapping[nim] = info["dosen"]
     return mapping, skipped
+
+
+def load_perwalian_roster(folder_path):
+    """
+    Baca semua PDF di folder_path. Kembalikan (roster, skipped): roster =
+    {nim: {"nama", "dosen", "kelas", "semester"}} (satu entri per mahasiswa
+    - dipakai fitur "Rekap Perwalian" yang mulai dari roster, bukan dari
+    file nilai), skipped = list (nama_file, pesan_error) untuk PDF yang
+    formatnya tidak dikenali.
+    """
+    roster, skipped = {}, []
+    for path in scan_pdf_folder(folder_path):
+        try:
+            info = _parse_perwalian_pdf(path)
+        except Exception as e:
+            skipped.append((os.path.basename(path), str(e)))
+            continue
+        for nim, nama in info["students"].items():
+            roster[nim] = {
+                "nama": nama,
+                "dosen": info["dosen"],
+                "kelas": info["kelas"],
+                "semester": info["semester"],
+            }
+    return roster, skipped
 
 
 def _label_value(grid, nrows, ncols, label):
@@ -243,17 +278,17 @@ def parse_course_file(path):
     return result
 
 
-def generate(folder_path):
+def generate_from_folders(folder_paths):
     """
-    Parse semua file di folder_path. Kembalikan (courses, skipped):
-    courses = list dict hasil parse_course_file(), terurut abjad berdasarkan
-    nama mata kuliah; skipped = list (nama_file, pesan_error) untuk file yang
-    GAGAL DIBUKA sama sekali (bukan .xlsx/.xls valid - beda dari
-    parse_error, yang masih menghasilkan course dengan sheet tetap disalin).
+    Sama seperti generate(), tapi menggabungkan file dari BEBERAPA folder
+    sekaligus (dipakai fitur Rekap Perwalian, buat mencari nilai mahasiswa
+    lintas beberapa folder/semester data nilai dalam satu proses).
     """
-    paths = scan_folder(folder_path)
+    paths = []
+    for folder in folder_paths:
+        paths.extend(scan_folder(folder))
     if not paths:
-        raise ValueError("Tidak ada file Excel (.xls/.xlsx) yang ditemukan di folder ini.")
+        raise ValueError("Tidak ada file Excel (.xls/.xlsx) yang ditemukan di folder-folder ini.")
 
     courses, skipped = [], []
     for path in paths:
@@ -270,6 +305,17 @@ def generate(folder_path):
 
     courses.sort(key=lambda c: c["course_name"].lower())
     return courses, skipped
+
+
+def generate(folder_path):
+    """
+    Parse semua file di folder_path. Kembalikan (courses, skipped):
+    courses = list dict hasil parse_course_file(), terurut abjad berdasarkan
+    nama mata kuliah; skipped = list (nama_file, pesan_error) untuk file yang
+    GAGAL DIBUKA sama sekali (bukan .xlsx/.xls valid - beda dari
+    parse_error, yang masih menghasilkan course dengan sheet tetap disalin).
+    """
+    return generate_from_folders([folder_path])
 
 
 def _failing_students(courses):
@@ -298,6 +344,70 @@ def _failing_students(courses):
         for nim, info in by_nim.items()
     ]
     rows.sort(key=lambda r: (-r["jumlah_gagal"], r["nim"]))
+    return rows
+
+
+def _grades_by_nim(courses):
+    """{nim: {"lulus": [nama_mk,...], "gagal": [nama_mk,...]}} dari seluruh
+    mata kuliah yang berhasil di-parse - dipakai buat mencari nilai
+    mahasiswa dari roster perwalian (lihat generate_perwalian_rekap)."""
+    by_nim = {}
+    for course in courses:
+        if course["parse_error"]:
+            continue
+        for s in course["students"]:
+            if not s["nim"] or not s["status"]:
+                continue
+            entry = by_nim.setdefault(s["nim"], {"lulus": [], "gagal": []})
+            if s["status"] == LULUS:
+                entry["lulus"].append(course["course_name"])
+            else:
+                entry["gagal"].append(course["course_name"])
+    return by_nim
+
+
+_TANPA_DATA_NILAI = "(Tidak ada data nilai ditemukan di folder yang dipilih)"
+
+
+def generate_perwalian_rekap(roster, courses):
+    """
+    Mulai dari roster perwalian (bukan dari file nilai) - buat 1 baris per
+    mahasiswa di roster, cari nilainya di seluruh 'courses' (hasil
+    generate_from_folders(), boleh gabungan banyak folder/semester). Kembalikan
+    list baris terurut: per dosen wali (abjad), lalu di dalam tiap dosen wali
+    - yang gagal >=1 MK dulu (paling banyak gagal duluan), baru yang lulus
+    semua, baru yang datanya belum ketemu sama sekali.
+    """
+    grades = _grades_by_nim(courses)
+
+    rows = []
+    for nim, info in roster.items():
+        g = grades.get(nim, {"lulus": [], "gagal": []})
+        jumlah_ditemukan = len(g["lulus"]) + len(g["gagal"])
+        jumlah_gagal = len(g["gagal"])
+        if jumlah_ditemukan == 0:
+            daftar_gagal = _TANPA_DATA_NILAI
+        elif jumlah_gagal == 0:
+            daftar_gagal = "-"
+        else:
+            daftar_gagal = ", ".join(g["gagal"])
+        rows.append({
+            "dosen": info["dosen"] or "",
+            "nim": nim,
+            "nama": info["nama"],
+            "jumlah_ditemukan": jumlah_ditemukan,
+            "jumlah_gagal": jumlah_gagal,
+            "daftar_gagal": daftar_gagal,
+        })
+
+    def tier(row):
+        if row["jumlah_gagal"] > 0:
+            return 0
+        if row["jumlah_ditemukan"] > 0:
+            return 1
+        return 2
+
+    rows.sort(key=lambda r: (r["dosen"], tier(r), -r["jumlah_gagal"], r["nim"]))
     return rows
 
 
@@ -354,8 +464,26 @@ def export_excel(courses, output_path, perwalian=None):
     wb.save(output_path)
 
 
+def export_perwalian_excel(roster, courses, output_path):
+    """Versi export_excel() yang mulai dari roster perwalian - lihat
+    generate_perwalian_rekap()."""
+    wb = Workbook()
+    wb.remove(wb.active)
+    ws_ringkasan = wb.create_sheet("Ringkasan", 0)
+
+    used_names = set()
+    for course in courses:
+        title = _safe_sheet_name(course["course_name"], used_names)
+        _copy_sheet(course["worksheet"], wb, title)
+
+    rows = generate_perwalian_rekap(roster, courses)
+    _write_perwalian_ringkasan(ws_ringkasan, rows)
+    wb.save(output_path)
+
+
 _HEADER_FILL = PatternFill("solid", fgColor="D9D9D9")
 _FAIL_FILL = PatternFill("solid", fgColor="FCE4E4")
+_NODATA_FILL = PatternFill("solid", fgColor="F2F2F2")
 _THIN = Side(style="thin")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 _CENTER = Alignment(horizontal="center")
@@ -364,9 +492,14 @@ _CENTER = Alignment(horizontal="center")
 _LEFT = Alignment(horizontal="left")
 
 
-def _write_table(ws, start_row, headers, rows, col_widths, highlight_rows=None, left_align_cols=None):
-    highlight_rows = highlight_rows or set()
+def _write_table(ws, start_row, headers, rows, col_widths, highlight_rows=None, left_align_cols=None, row_fills=None):
+    """row_fills: {row_index: PatternFill} - fill per baris data (0-based,
+    relatif ke rows), lebih fleksibel dari highlight_rows (yang selalu
+    _FAIL_FILL) kalau butuh lebih dari 1 warna sekaligus."""
     left_align_cols = left_align_cols or set()
+    row_fills = dict(row_fills or {})
+    for i in (highlight_rows or set()):
+        row_fills.setdefault(i, _FAIL_FILL)
     for c, header in enumerate(headers, start=1):
         cell = ws.cell(row=start_row, column=c, value=header)
         cell.font = Font(bold=True)
@@ -379,8 +512,8 @@ def _write_table(ws, start_row, headers, rows, col_widths, highlight_rows=None, 
             cell = ws.cell(row=r, column=c, value=value)
             cell.border = _BORDER
             cell.alignment = _LEFT if c in left_align_cols else _CENTER
-            if i in highlight_rows:
-                cell.fill = _FAIL_FILL
+            if i in row_fills:
+                cell.fill = row_fills[i]
     for c, width in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(c)].width = width
     return start_row + 1 + len(rows)
@@ -486,6 +619,54 @@ def _write_ringkasan(ws, courses, perwalian=None):
         row=row, column=1,
         value=(
             note_text
+        ),
+    )
+    note.font = Font(italic=True, color="808080")
+
+
+def _write_perwalian_ringkasan(ws, rows):
+    ws.cell(row=1, column=1, value="Ringkasan Perwalian").font = Font(bold=True, size=14)
+
+    dosen_set = sorted({r["dosen"] for r in rows if r["dosen"]})
+    ws.cell(row=2, column=1, value=f"Jumlah Dosen Wali: {len(dosen_set)}")
+    ws.cell(row=3, column=1, value=f"Jumlah Mahasiswa (roster perwalian): {len(rows)}")
+
+    row = 5
+    # Kolom "Catatan" sengaja dikosongkan - dipakai dosen wali menandai
+    # tindak lanjut per mahasiswa (mis. "sudah dihubungi", "remedial"),
+    # bukan diisi otomatis oleh aplikasi.
+    table_rows = [
+        (r["dosen"], r["nim"], r["nama"], r["jumlah_ditemukan"], r["jumlah_gagal"], r["daftar_gagal"], "")
+        for r in rows
+    ]
+    row_fills = {}
+    for i, r in enumerate(rows):
+        if r["jumlah_gagal"] > 0:
+            row_fills[i] = _FAIL_FILL
+        elif r["jumlah_ditemukan"] == 0:
+            row_fills[i] = _NODATA_FILL
+
+    row = _write_table(
+        ws, row,
+        ["Dosen Wali", "NIM", "Nama", "Jumlah MK Ditemukan", "Jumlah MK Gagal", "Daftar MK Gagal", "Catatan"],
+        table_rows,
+        [30, 16, 30, 18, 16, 60, 30],
+        left_align_cols={1, 3, 6},
+        row_fills=row_fills,
+    )
+
+    row += 1
+    note = ws.cell(
+        row=row, column=1,
+        value=(
+            'Baris merah = tidak lulus minimal 1 mata kuliah. Baris abu-abu = '
+            '"Jumlah MK Ditemukan" = 0, artinya TIDAK ADA data nilai mahasiswa '
+            "itu di folder data nilai yang dipilih (bukan berarti lulus semua) "
+            "- kemungkinan datanya ada di folder lain yang belum diikutkan, "
+            "atau mahasiswanya belum/tidak mengambil mata kuliah apa pun di "
+            "semester yang dicek. Data ini juga belum memperhitungkan nilai "
+            "remedial dan status mahasiswa yang sudah nonaktif - cek ulang "
+            "manual sebelum dipakai sebagai dasar keputusan."
         ),
     )
     note.font = Font(italic=True, color="808080")
