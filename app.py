@@ -22,13 +22,12 @@ from tools import (
     folder_dosen_penasihat_akademik,
     folder_mata_kuliah,
     pdf_peserta,
-    rekap_nilai,
     rekap_perwalian,
     theme,
 )
 
 TOOL_GROUPS = [
-    ("Dosen Wali", [folder_dosen_penasihat_akademik, cek_berita_acara, eskalasi_sp, rekap_nilai, rekap_perwalian]),
+    ("Dosen Wali", [folder_dosen_penasihat_akademik, cek_berita_acara, eskalasi_sp, rekap_perwalian]),
     ("Mata Kuliah", [folder_mata_kuliah]),
     ("Sertifikasi", [pdf_peserta]),
     ("Dokumen", [bandingkan_dokumen]),

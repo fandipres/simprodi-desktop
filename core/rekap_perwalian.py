@@ -1,29 +1,31 @@
 """
-Tools: Gabungkan file nilai per mata kuliah (format "Evaluasi Ketercapaian
-MK"/OBE hasil export sistem akademik) jadi 1 file Excel - satu sheet per mata
-kuliah (disalin apa adanya, termasuk formatnya), diurutkan abjad berdasarkan
-nama mata kuliah, ditambah 1 sheet "Ringkasan" di depan berisi rekap
-kelulusan per mata kuliah dan daftar mahasiswa yang tidak lulus.
+Tools: Rekap nilai per dosen wali, mulai dari roster perwalian (bukan dari
+file nilai). Untuk SEMUA mahasiswa di roster perwalian, cari nilainya di
+seluruh file nilai per mata kuliah (format "Evaluasi Ketercapaian MK"/OBE
+hasil export sistem akademik) yang diberikan - boleh gabungan beberapa
+folder/semester sekaligus.
+
+Hasilnya 1 file Excel: 1 sheet "Ringkasan" (mahasiswa dikelompokkan per
+dosen wali, yang gagal paling banyak ditaruh duluan), ditambah 1 sheet
+gabungan per NAMA mata kuliah (semua kelas paralel yang mengajarkannya
+digabung jadi 1 sheet, dengan kolom Kelas & Dosen Pengajar supaya konteks
+tiap baris tetap jelas).
 
 Tiap mata kuliah boleh beda jumlah Sub-CPMK/kolom penilaian (makanya lebar
-tabelnya beda-beda per file) - kolom yang dibutuhkan (NIM, Nama Mahasiswa,
-Status Kelulusan MK) dicari lewat teks header-nya, bukan posisi kolom tetap,
-supaya tetap kebaca walau jumlah kolom di antaranya berubah. Kalau suatu file
-formatnya tidak dikenali sama sekali (bukan format ini), sheet-nya TETAP
-disalin ke file gabungan, cuma tidak ikut dihitung di Ringkasan.
-
-Opsional: folder berisi PDF "Daftar Hadir Mahasiswa Pembimbingan Akademik"
-(form FM-FKT-02-01) bisa diikutkan lewat load_perwalian()/--perwalian, supaya
-tabel mahasiswa tidak lulus ditandai dosen wali SAAT INI (bukan dosen wali
-waktu nilai itu diambil - keduanya bisa beda kalau ada pergantian dosen wali
-antar semester) dan dikelompokkan per dosen wali.
+tabel sumbernya beda-beda per file) - kolom yang dibutuhkan (NIM, Nama
+Mahasiswa, Status Kelulusan MK) dicari lewat teks header-nya, bukan posisi
+kolom tetap, supaya tetap kebaca walau jumlah kolom di antaranya berubah.
+Kalau suatu file nilai formatnya tidak dikenali sama sekali, mahasiswa di
+mata kuliah itu dianggap belum ada datanya (bukan dianggap lulus) - lihat
+catatan di sheet Ringkasan. Kalau file PDF perwalian formatnya tidak
+dikenali, dilewati dengan pesan jelas (tidak menggagalkan yang lain).
 
 Cara pakai (dari folder ini):
-    python rekap_nilai.py --folder "path/ke/folder/nilai" --output "hasil.xlsx" \\
-        [--perwalian "path/ke/folder/perwalian"]
+    python rekap_perwalian.py --perwalian "path/ke/folder/perwalian" \\
+        --folder "path/ke/folder/nilai1" "path/ke/folder/nilai2" \\
+        --output "hasil.xlsx"
 """
 import argparse
-import copy
 import os
 import re
 
@@ -38,7 +40,7 @@ LULUS = "L"
 def scan_folder(folder_path):
     """Daftar file Excel (.xls/.xlsx) di folder_path, diurutkan nama file -
     dipakai cuma sebagai urutan awal sebelum di-parse (urutan sheet final
-    tetap ikut nama mata kuliah hasil parsing, lihat generate())."""
+    tetap ikut nama mata kuliah hasil parsing)."""
     matched = []
     with os.scandir(folder_path) as entries:
         for entry in sorted(entries, key=lambda e: e.name):
@@ -98,32 +100,12 @@ def _parse_perwalian_pdf(path):
     }
 
 
-def load_perwalian(folder_path):
-    """
-    Baca semua PDF di folder_path. Kembalikan (mapping, skipped): mapping =
-    {nim: nama_dosen_wali_saat_ini}, skipped = list (nama_file, pesan_error)
-    untuk PDF yang formatnya tidak dikenali (dilewati, tidak menggagalkan
-    yang lain).
-    """
-    mapping, skipped = {}, []
-    for path in scan_pdf_folder(folder_path):
-        try:
-            info = _parse_perwalian_pdf(path)
-        except Exception as e:
-            skipped.append((os.path.basename(path), str(e)))
-            continue
-        for nim in info["students"]:
-            mapping[nim] = info["dosen"]
-    return mapping, skipped
-
-
 def load_perwalian_roster(folder_path):
     """
     Baca semua PDF di folder_path. Kembalikan (roster, skipped): roster =
-    {nim: {"nama", "dosen", "kelas", "semester"}} (satu entri per mahasiswa
-    - dipakai fitur "Rekap Perwalian" yang mulai dari roster, bukan dari
-    file nilai), skipped = list (nama_file, pesan_error) untuk PDF yang
-    formatnya tidak dikenali.
+    {nim: {"nama", "dosen", "kelas", "semester"}} (satu entri per
+    mahasiswa), skipped = list (nama_file, pesan_error) untuk PDF yang
+    formatnya tidak dikenali (dilewati, tidak menggagalkan yang lain).
     """
     roster, skipped = {}, []
     for path in scan_pdf_folder(folder_path):
@@ -243,11 +225,9 @@ def _parse_students(grid, nrows, ncols):
 def parse_course_file(path):
     """
     Baca 1 file nilai mata kuliah. Selalu berhasil selama filenya adalah
-    Excel yang valid - worksheet sumbernya (buat disalin apa adanya) dan
-    metadata (nama MK, kelas, dosen) tetap dikembalikan walau tabel
-    mahasiswanya gagal dikenali; dalam kasus itu "students" kosong dan
-    "parse_error" berisi alasannya (sheet TETAP disalin, cuma tidak ikut
-    dihitung di Ringkasan).
+    Excel yang valid - metadata (nama MK, kelas, dosen) tetap dikembalikan
+    walau tabel mahasiswanya gagal dikenali; dalam kasus itu "students"
+    kosong dan "parse_error" berisi alasannya.
     """
     wb = load_workbook(path, data_only=True)
     ws = wb.worksheets[0]
@@ -264,7 +244,6 @@ def parse_course_file(path):
 
     result = {
         "source_path": path,
-        "worksheet": ws,
         "course_name": str(course_name).strip(),
         "kelas": str(kelas).strip() if kelas else None,
         "dosen": str(dosen).strip() if dosen else None,
@@ -280,9 +259,12 @@ def parse_course_file(path):
 
 def generate_from_folders(folder_paths):
     """
-    Sama seperti generate(), tapi menggabungkan file dari BEBERAPA folder
-    sekaligus (dipakai fitur Rekap Perwalian, buat mencari nilai mahasiswa
-    lintas beberapa folder/semester data nilai dalam satu proses).
+    Parse semua file Excel di seluruh folder_paths sekaligus (boleh lebih
+    dari 1 folder/semester). Kembalikan (courses, skipped): courses = list
+    dict hasil parse_course_file(), terurut abjad berdasarkan nama mata
+    kuliah; skipped = list (nama_file, pesan_error) untuk file yang GAGAL
+    DIBUKA sama sekali (bukan .xlsx/.xls valid - beda dari parse_error,
+    yang masih menghasilkan course, cuma "students"-nya kosong).
     """
     paths = []
     for folder in folder_paths:
@@ -305,46 +287,6 @@ def generate_from_folders(folder_paths):
 
     courses.sort(key=lambda c: c["course_name"].lower())
     return courses, skipped
-
-
-def generate(folder_path):
-    """
-    Parse semua file di folder_path. Kembalikan (courses, skipped):
-    courses = list dict hasil parse_course_file(), terurut abjad berdasarkan
-    nama mata kuliah; skipped = list (nama_file, pesan_error) untuk file yang
-    GAGAL DIBUKA sama sekali (bukan .xlsx/.xls valid - beda dari
-    parse_error, yang masih menghasilkan course dengan sheet tetap disalin).
-    """
-    return generate_from_folders([folder_path])
-
-
-def _failing_students(courses):
-    """{nim: {"nama":..., "gagal": [nama_mk, ...]}} lintas semua mata kuliah
-    yang berhasil di-parse, lalu diringkas jadi list baris terurut (jumlah MK
-    gagal terbanyak dulu, lalu NIM)."""
-    by_nim = {}
-    for course in courses:
-        if course["parse_error"]:
-            continue
-        for s in course["students"]:
-            if not s["nim"] or not s["status"] or s["status"] == LULUS:
-                continue
-            entry = by_nim.setdefault(s["nim"], {"nama": "", "gagal": []})
-            if s["nama"]:
-                entry["nama"] = s["nama"]
-            entry["gagal"].append(course["course_name"])
-
-    rows = [
-        {
-            "nim": nim,
-            "nama": info["nama"],
-            "jumlah_gagal": len(info["gagal"]),
-            "daftar_gagal": ", ".join(info["gagal"]),
-        }
-        for nim, info in by_nim.items()
-    ]
-    rows.sort(key=lambda r: (-r["jumlah_gagal"], r["nim"]))
-    return rows
 
 
 def _grades_by_nim(courses):
@@ -373,10 +315,10 @@ def generate_perwalian_rekap(roster, courses):
     """
     Mulai dari roster perwalian (bukan dari file nilai) - buat 1 baris per
     mahasiswa di roster, cari nilainya di seluruh 'courses' (hasil
-    generate_from_folders(), boleh gabungan banyak folder/semester). Kembalikan
-    list baris terurut: per dosen wali (abjad), lalu di dalam tiap dosen wali
-    - yang gagal >=1 MK dulu (paling banyak gagal duluan), baru yang lulus
-    semua, baru yang datanya belum ketemu sama sekali.
+    generate_from_folders(), boleh gabungan banyak folder/semester).
+    Kembalikan list baris terurut: per dosen wali (abjad), lalu di dalam
+    tiap dosen wali - yang gagal >=1 MK dulu (paling banyak gagal duluan),
+    baru yang lulus semua, baru yang datanya belum ketemu sama sekali.
     """
     grades = _grades_by_nim(courses)
 
@@ -411,92 +353,15 @@ def generate_perwalian_rekap(roster, courses):
     return rows
 
 
-def _copy_sheet(src_ws, wb, title):
-    """Salin 1 worksheet APA ADANYA (nilai, style per sel, merge cell, lebar
-    kolom/tinggi baris) ke workbook tujuan - dipakai supaya file nilai asli
-    per mata kuliah tetap terlihat sama persis sebagai salah satu sheet di
-    file gabungan."""
-    ws = wb.create_sheet(title)
-    for row in src_ws.iter_rows():
-        for cell in row:
-            new_cell = ws.cell(row=cell.row, column=cell.column, value=cell.value)
-            if cell.has_style:
-                new_cell.font = copy.copy(cell.font)
-                new_cell.fill = copy.copy(cell.fill)
-                new_cell.border = copy.copy(cell.border)
-                new_cell.alignment = copy.copy(cell.alignment)
-                new_cell.number_format = cell.number_format
-    for merged_range in src_ws.merged_cells.ranges:
-        ws.merge_cells(str(merged_range))
-    for col_letter, dim in src_ws.column_dimensions.items():
-        if dim.width:
-            ws.column_dimensions[col_letter].width = dim.width
-    for row_idx, dim in src_ws.row_dimensions.items():
-        if dim.height:
-            ws.row_dimensions[row_idx].height = dim.height
-    return ws
-
-
-def _course_sheet_name(course, used):
-    """
-    Nama sheet dari mata kuliah + kelas (kalau ada) - PENTING dipakai kelas
-    (bukan nama mata kuliah saja) karena satu mata kuliah bisa punya
-    beberapa kelas paralel (mis. IF-A Pagi, IF-A Sore, IF-B Pagi, dst)
-    waktu beberapa folder data nilai digabung sekaligus - tanpa kelas,
-    sheet-nya cuma kebedakan lewat akhiran " (2)", " (3)" yang tidak
-    informatif.
-
-    Batas nama sheet Excel cuma 31 karakter - kalau nama mata kuliah +
-    kelas kepanjangan, bagian KELAS diprioritaskan tetap utuh (nama mata
-    kuliahnya yang dipotong duluan), supaya tetap bisa dibedakan tanpa
-    perlu buka isi sheet-nya dulu.
-    """
-    name = "".join(ch for ch in course["course_name"] if ch not in r":\/?*[]").strip() or "Mata Kuliah"
-    suffix = f" - {course['kelas']}" if course["kelas"] else ""
-    suffix = "".join(ch for ch in suffix if ch not in r":\/?*[]")[:31]
-
-    def build(n=None):
-        extra = f" ({n})" if n else ""
-        max_name_len = 31 - len(suffix) - len(extra)
-        if max_name_len < 1:
-            return (suffix + extra)[:31] if suffix else (name[:31 - len(extra)] + extra)
-        return name[:max_name_len] + suffix + extra
-
-    candidate = build()
-    n = 2
-    while candidate.lower() in used:
-        candidate = build(n)
-        n += 1
-    used.add(candidate.lower())
-    return candidate
-
-
-def export_excel(courses, output_path, perwalian=None):
-    wb = Workbook()
-    wb.remove(wb.active)
-    ws_ringkasan = wb.create_sheet("Ringkasan", 0)
-
-    used_names = set()
-    for course in courses:
-        title = _course_sheet_name(course, used_names)
-        _copy_sheet(course["worksheet"], wb, title)
-
-    _write_ringkasan(ws_ringkasan, courses, perwalian)
-    wb.save(output_path)
-
-
-def export_perwalian_excel(roster, courses, output_path):
-    """Versi export_excel() yang mulai dari roster perwalian - lihat
-    generate_perwalian_rekap()."""
+def export_excel(roster, courses, output_path):
     wb = Workbook()
     wb.remove(wb.active)
     ws_ringkasan = wb.create_sheet("Ringkasan", 0)
 
     # 1 sheet per NAMA mata kuliah (gabungan semua kelas paralel yang
-    # mengajarkannya), BUKAN salinan mentah 1 sheet per kelas seperti
-    # export_excel() - dosen wali cuma perlu tahu status kelulusan tiap
-    # anak walinya, bukan rincian Sub-CPMK; kolom Kelas & Dosen Pengajar
-    # menjaga konteks asal tiap baris tetap kelihatan.
+    # mengajarkannya) - dosen wali cuma perlu tahu status kelulusan tiap
+    # anak walinya, bukan rincian Sub-CPMK mentah; kolom Kelas & Dosen
+    # Pengajar menjaga konteks asal tiap baris tetap kelihatan.
     by_course_name = {}
     for course in courses:
         by_course_name.setdefault(course["course_name"], []).append(course)
@@ -506,14 +371,13 @@ def export_perwalian_excel(roster, courses, output_path):
         _write_course_summary_sheet(wb, course_name, by_course_name[course_name], used_names)
 
     rows = generate_perwalian_rekap(roster, courses)
-    _write_perwalian_ringkasan(ws_ringkasan, rows)
+    _write_ringkasan(ws_ringkasan, rows)
     wb.save(output_path)
 
 
 def _write_course_summary_sheet(wb, course_name, course_list, used_names):
     """1 sheet gabungan untuk 1 nama mata kuliah, isinya mahasiswa dari
-    SEMUA kelas paralel yang mengajarkan mata kuliah itu (bukan salinan
-    mentah format OBE asli) - lihat catatan di export_perwalian_excel()."""
+    SEMUA kelas paralel yang mengajarkan mata kuliah itu."""
     title_base = "".join(ch for ch in course_name if ch not in r":\/?*[]").strip() or "Mata Kuliah"
     base = title_base[:31]
     title, n = base, 2
@@ -554,19 +418,14 @@ _NODATA_FILL = PatternFill("solid", fgColor="F2F2F2")
 _THIN = Side(style="thin")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 _CENTER = Alignment(horizontal="center")
-
-
 _LEFT = Alignment(horizontal="left")
 
 
-def _write_table(ws, start_row, headers, rows, col_widths, highlight_rows=None, left_align_cols=None, row_fills=None):
+def _write_table(ws, start_row, headers, rows, col_widths, left_align_cols=None, row_fills=None):
     """row_fills: {row_index: PatternFill} - fill per baris data (0-based,
-    relatif ke rows), lebih fleksibel dari highlight_rows (yang selalu
-    _FAIL_FILL) kalau butuh lebih dari 1 warna sekaligus."""
+    relatif ke rows)."""
     left_align_cols = left_align_cols or set()
-    row_fills = dict(row_fills or {})
-    for i in (highlight_rows or set()):
-        row_fills.setdefault(i, _FAIL_FILL)
+    row_fills = row_fills or {}
     for c, header in enumerate(headers, start=1):
         cell = ws.cell(row=start_row, column=c, value=header)
         cell.font = Font(bold=True)
@@ -586,115 +445,7 @@ def _write_table(ws, start_row, headers, rows, col_widths, highlight_rows=None, 
     return start_row + 1 + len(rows)
 
 
-_TANPA_PERWALIAN = "(Tidak ada di data perwalian)"
-
-
-def _write_ringkasan(ws, courses, perwalian=None):
-    ws.cell(row=1, column=1, value="Ringkasan Nilai").font = Font(bold=True, size=14)
-
-    kelas_set = sorted({c["kelas"] for c in courses if c["kelas"]})
-    if kelas_set:
-        ws.cell(row=2, column=1, value=f"Kelas: {', '.join(kelas_set)}")
-    ws.cell(row=3, column=1, value=f"Jumlah Mata Kuliah: {len(courses)}")
-
-    row = 5
-    ws.cell(row=row, column=1, value="Rekap per Mata Kuliah").font = Font(bold=True, size=12)
-    row += 1
-
-    course_rows = []
-    for course in courses:
-        if course["parse_error"]:
-            course_rows.append((
-                course["course_name"], course["kelas"] or "", course["dosen"] or "",
-                "", "", "", f"Tidak dianalisis - {course['parse_error']}",
-            ))
-            continue
-        total = len(course["students"])
-        lulus = sum(1 for s in course["students"] if s["status"] == LULUS)
-        dinilai = sum(1 for s in course["students"] if s["status"])
-        tidak_lulus = dinilai - lulus
-        persen = f"{lulus / dinilai * 100:.0f}%" if dinilai else ""
-        course_rows.append((
-            course["course_name"], course["kelas"] or "", course["dosen"] or "",
-            total, lulus, tidak_lulus, persen,
-        ))
-
-    # Kolom "Kelas" penting kalau mata kuliah yang sama punya beberapa
-    # kelas paralel (lihat catatan di _course_sheet_name) - tanpa ini, baris
-    # "Mata Kuliah" yang sama berulang tanpa cara membedakan kelasnya.
-    row = _write_table(
-        ws, row,
-        ["Mata Kuliah", "Kelas", "Dosen", "Jumlah Mahasiswa", "Lulus", "Tidak Lulus", "% Lulus"],
-        course_rows,
-        [30, 16, 30, 16, 10, 12, 24],
-        left_align_cols={1, 2, 3},
-    )
-
-    row += 2
-    ws.cell(row=row, column=1, value="Mahasiswa Tidak Lulus (minimal 1 mata kuliah)").font = Font(bold=True, size=12)
-    row += 1
-
-    failing = _failing_students(courses)
-    if failing:
-        # Kolom "Catatan" sengaja dikosongkan - dipakai dosen wali menandai
-        # tindak lanjut per mahasiswa (mis. "sudah dihubungi", "remedial"),
-        # bukan diisi otomatis oleh aplikasi.
-        if perwalian is not None:
-            for f in failing:
-                f["dosen_wali"] = perwalian.get(f["nim"]) or _TANPA_PERWALIAN
-            # Dikelompokkan per dosen wali (abjad, yang tidak ketemu datanya
-            # ditaruh paling akhir), baru di dalam tiap dosen diurutkan jumlah
-            # MK gagal terbanyak dulu.
-            failing.sort(key=lambda f: (
-                f["dosen_wali"] == _TANPA_PERWALIAN, f["dosen_wali"],
-                -f["jumlah_gagal"], f["nim"],
-            ))
-            headers = ["NIM", "Nama", "Dosen Wali (Saat Ini)", "Jumlah MK Gagal", "Mata Kuliah yang Gagal", "Catatan"]
-            fail_rows = [
-                (f["nim"], f["nama"], f["dosen_wali"], f["jumlah_gagal"], f["daftar_gagal"], "")
-                for f in failing
-            ]
-            widths = [16, 30, 30, 16, 60, 30]
-            left_cols = {2, 3, 5}
-        else:
-            headers = ["NIM", "Nama", "Jumlah MK Gagal", "Mata Kuliah yang Gagal", "Catatan"]
-            fail_rows = [(f["nim"], f["nama"], f["jumlah_gagal"], f["daftar_gagal"], "") for f in failing]
-            widths = [16, 30, 16, 60, 30]
-            left_cols = {2, 4}
-        row = _write_table(
-            ws, row, headers, fail_rows, widths,
-            highlight_rows=set(range(len(fail_rows))),
-            left_align_cols=left_cols,
-        )
-    else:
-        ws.cell(row=row, column=1, value="Tidak ada mahasiswa yang tidak lulus di mata kuliah manapun.")
-        row += 1
-
-    row += 1
-    note_text = (
-        "Catatan: data ini belum memperhitungkan nilai remedial, dan belum "
-        "mengecualikan mahasiswa yang sudah keluar/nonaktif di semester "
-        "berikutnya - cek ulang manual untuk kasus-kasus tersebut sebelum "
-        "dipakai sebagai dasar keputusan."
-    )
-    if perwalian is not None:
-        note_text += (
-            f' Kolom "Dosen Wali (Saat Ini)" diambil dari file data perwalian '
-            f'yang dipilih - status "{_TANPA_PERWALIAN}" berarti NIM tersebut '
-            "tidak ditemukan di file perwalian manapun yang dipilih (bisa "
-            "karena filenya tidak disertakan, atau mahasiswanya sudah tidak "
-            "aktif)."
-        )
-    note = ws.cell(
-        row=row, column=1,
-        value=(
-            note_text
-        ),
-    )
-    note.font = Font(italic=True, color="808080")
-
-
-def _write_perwalian_ringkasan(ws, rows):
+def _write_ringkasan(ws, rows):
     ws.cell(row=1, column=1, value="Ringkasan Perwalian").font = Font(bold=True, size=14)
 
     dosen_set = sorted({r["dosen"] for r in rows if r["dosen"]})
@@ -744,29 +495,24 @@ def _write_perwalian_ringkasan(ws, rows):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--folder", required=True, help="Folder berisi file Excel nilai per mata kuliah")
+    parser.add_argument("--perwalian", required=True, help="Folder berisi PDF data perwalian")
+    parser.add_argument("--folder", nargs="+", required=True, help="Satu atau lebih folder berisi file Excel nilai per mata kuliah")
     parser.add_argument("--output", required=True, help="Path file Excel hasil")
-    parser.add_argument("--perwalian", help="Folder berisi PDF data perwalian (opsional)")
     args = parser.parse_args()
 
-    courses, skipped = generate(args.folder)
+    roster, roster_skipped = load_perwalian_roster(args.perwalian)
+    courses, skipped = generate_from_folders(args.folder)
+    export_excel(roster, courses, args.output)
 
-    perwalian, perwalian_skipped = None, []
-    if args.perwalian:
-        perwalian, perwalian_skipped = load_perwalian(args.perwalian)
-
-    export_excel(courses, args.output, perwalian)
-
+    print(f"Data perwalian terbaca: {len(roster)} mahasiswa")
+    for name, msg in roster_skipped:
+        print(f"Dilewati (perwalian) - {name}: {msg}")
     print(f"Mata kuliah tergabung ({len(courses)}): {', '.join(c['course_name'] for c in courses)}")
     for name, msg in skipped:
-        print(f"Dilewati - {name}: {msg}")
+        print(f"Dilewati (nilai) - {name}: {msg}")
     for c in courses:
         if c["parse_error"]:
             print(f"Tidak dianalisis - {c['course_name']}: {c['parse_error']}")
-    if args.perwalian:
-        print(f"Data perwalian terbaca: {len(perwalian)} mahasiswa")
-        for name, msg in perwalian_skipped:
-            print(f"Dilewati (perwalian) - {name}: {msg}")
     print(f"Hasil: {args.output}")
 
 

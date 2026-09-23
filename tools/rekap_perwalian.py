@@ -1,11 +1,9 @@
 """
 Tool UI: Rekap Perwalian.
 Wrapper Tkinter di sekitar fungsi load_perwalian_roster()/
-generate_from_folders()/export_perwalian_excel() dari core/rekap_nilai.py.
+generate_from_folders()/export_excel() dari core/rekap_perwalian.py.
 
-Beda dari tool "Rekap Nilai": tool itu mulai dari file nilai (per mata
-kuliah) lalu (opsional) dicocokkan ke data perwalian. Tool ini KEBALIKANNYA
-- mulai dari roster perwalian (semua anak wali tiap dosen), lalu nilainya
+Mulai dari roster perwalian (semua anak wali tiap dosen), lalu nilainya
 dicari di seluruh folder data nilai yang dipilih (boleh lebih dari 1
 folder/semester sekaligus) kalau ada.
 """
@@ -16,7 +14,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from core import rekap_nilai as core
+from core import rekap_perwalian as core
 from tools import theme
 from tools.common import data_dir
 
@@ -170,7 +168,7 @@ def build_frame(parent):
         try:
             roster, roster_skipped = core.load_perwalian_roster(perwalian_path)
             courses, skipped = core.generate_from_folders(folders)
-            core.export_perwalian_excel(roster, courses, output_path)
+            core.export_excel(roster, courses, output_path)
             result_queue.put(("ok", roster, roster_skipped, courses, skipped, output_path))
         except Exception as e:
             result_queue.put(("error", str(e)))
