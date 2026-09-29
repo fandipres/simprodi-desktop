@@ -1,9 +1,8 @@
 """
 Tools: Hasilkan calon daftar SP_Tahap Awal, SP_Tahap Akhir, dan daftar
-mahasiswa non-aktif berkepanjangan untuk semester TERBARU, dari data
-mentah mahasiswa aktif, non-aktif, & lulus per semester (format kolom:
-Nim, Nama, Program Studi, Ipk, Total Sks Lulus, dst - hasil export
-akademik).
+mahasiswa non-aktif untuk semester TERBARU, dari data mentah mahasiswa
+aktif, non-aktif, & lulus per semester (format kolom: Nim, Nama, Program
+Studi, Ipk, Total Sks Lulus, dst - hasil export akademik).
 
 Aturan (kebijakan kampus):
 - SP Tahap Awal: mahasiswa AKTIF dengan IPK akumulasi < 2.0 pada semester
@@ -25,9 +24,12 @@ Aturan (kebijakan kampus):
 - "SP ke-" dihitung sendiri (bukan input manual): tiap kali seorang
   mahasiswa masuk salah satu daftar SP (Awal atau Akhir) di suatu
   semester, levelnya = level SP terakhir dia + 1, maksimal SP-3.
-- Non-aktif berkepanjangan: mahasiswa yang muncul di daftar non-aktif
-  pada >= 4 semester BERTURUT-TURUT (dihitung sampai semester non-aktif
-  terbaru yang tersedia di antara file yang diberikan).
+- Rekap Non-Aktif: SEMUA mahasiswa yang masih non-aktif di semester
+  terbaru yang tersedia (streak >= 1, tanpa batas minimum), disertai
+  jumlah semester non-aktif berturut-turut sampai saat itu dan semester
+  tempuhnya saat itu - kolom semester tempuh ini membantu memilah mana
+  yang sudah jadi tanggung jawab prodi (semester 9 ke atas, sudah lewat
+  masa studi normal) dari yang masih di semester awal.
 - DO: dipicu salah satu dari 2 kondisi (mana yang lebih dulu terjadi) -
   (a) mahasiswa yang SUDAH berada di level SP-3 (baik dari riwayat SP
   Tahap Awal maupun SP Tahap Akhir) dan kena checkpoint SP lagi (Tahap
@@ -64,7 +66,6 @@ MAX_SP_LEVEL = 3
 AWAL_MAX_SEMESTER = 6
 AKHIR_MIN_SEMESTER = 8
 AKHIR_EXEMPT_GAP = 2  # semester masa berlaku sebelum checkpoint berikutnya dicek lagi
-NONAKTIF_MIN_STREAK = 4
 DO_MIN_SEMESTER = 14  # backstop: DO walau belum SP-3, kalau semester tempuh sudah >= ini
 
 _TERM_YEAR_FIRST = re.compile(r"(Ganjil|Genap)\s+(\d{4})-(\d{4})", re.IGNORECASE)
@@ -402,14 +403,16 @@ def generate(aktif_paths, nonaktif_paths, lulus_paths=(), recap_paths=()):
             "do_eskalasi": do_eskalasi,
         }
 
+    latest_sem = semesters[-1]
     nonaktif_rows = []
     for nim, streak in nonaktif_streak.items():
-        if streak >= NONAKTIF_MIN_STREAK:
+        if streak > 0:
             info = last_info.get(nim, {"nama": "", "prodi": ""})
             nonaktif_rows.append({
                 "NIM": nim,
                 "Nama": info["nama"],
                 "Prodi": info["prodi"],
+                "Semester": _semester_number(nim, latest_sem["year_start"], latest_sem["term"]),
                 "Semester Non-Aktif Berturut-turut": streak,
             })
     nonaktif_rows.sort(key=lambda r: r["NIM"])
@@ -487,7 +490,7 @@ def export_excel(result, output_path):
     has_eskalasi = result.get("has_eskalasi", False)
     sp_columns = ["NIM", "Nama", "Prodi", "Semester", "IPK", "SKS Lulus", "SP ke-", "Status"]
     do_columns = ["NIM", "Nama", "Prodi", "Semester", "IPK", "SKS Lulus", "Keterangan", "Status"]
-    nonaktif_columns = ["NIM", "Nama", "Prodi", "Semester Non-Aktif Berturut-turut"]
+    nonaktif_columns = ["NIM", "Nama", "Prodi", "Semester", "Semester Non-Aktif Berturut-turut"]
     if has_eskalasi:
         sp_columns = sp_columns + ["Eskalasi"]
         do_columns = do_columns + ["Eskalasi"]
