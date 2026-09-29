@@ -228,9 +228,9 @@ def generate(aktif_paths, nonaktif_paths, lulus_paths=(), recap_paths=()):
     """
     Kembalikan dict hasil untuk semester TERBARU:
         label, semester_diproses, sp_tahap_awal, sp_tahap_akhir, do,
-        nonaktif_berkepanjangan, has_eskalasi (list of dict, siap
-        dipakai df/ekspor). Tiap baris SP/DO disertai kolom "Status"
-        (Aktif/Non-Aktif pada semester itu).
+        nonaktif, has_eskalasi (list of dict, siap dipakai df/ekspor).
+        Tiap baris SP/DO disertai kolom "Status" (Aktif/Non-Aktif pada
+        semester itu).
 
     Kalau recap_paths diisi, level SP disambung dari riwayat file rekap
     tersebut (eskalasi_sp.compute_levels) dan tiap baris SP/DO hasil
@@ -417,7 +417,7 @@ def generate(aktif_paths, nonaktif_paths, lulus_paths=(), recap_paths=()):
             })
     nonaktif_rows.sort(key=lambda r: r["NIM"])
 
-    result["nonaktif_berkepanjangan"] = nonaktif_rows
+    result["nonaktif"] = nonaktif_rows
     result["semester_diproses"] = recap_labels + [
         s["label"] for s in semesters if s["label"] not in recap_labels
     ]
@@ -624,7 +624,7 @@ def export_excel(result, output_path):
     write_sheet("DO", result["do"], do_columns, highlight_col=highlight_col,
                 column_widths=_TEMPLATE_COLUMN_WIDTHS["DO"] + extra_widths)
 
-    write_sheet("Rekap Non-Aktif", result["nonaktif_berkepanjangan"], nonaktif_columns)
+    write_sheet("Rekap Non-Aktif", result["nonaktif"], nonaktif_columns)
 
     write_infografis_sheet(result.get("semester_summary", []))
 
@@ -649,7 +649,7 @@ def main():
     print(f"SP Tahap Awal      : {len(result['sp_tahap_awal'])}")
     print(f"SP Tahap Akhir     : {len(result['sp_tahap_akhir'])}")
     print(f"DO                 : {len(result['do'])}")
-    print(f"Rekap Non-Aktif    : {len(result['nonaktif_berkepanjangan'])}")
+    print(f"Rekap Non-Aktif    : {len(result['nonaktif'])}")
     print(f"Hasil : {args.output}")
 
 

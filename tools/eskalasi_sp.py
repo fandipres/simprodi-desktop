@@ -243,7 +243,7 @@ def build_frame(parent):
                 f"({len(result['sp_tahap_akhir_eskalasi'])} eskalasi)")
             log(f"  DO                       : {len(result['do'])} mahasiswa "
                 f"({len(result['do_eskalasi'])} eskalasi)")
-            log(f"  Rekap Non-Aktif          : {len(result['nonaktif_berkepanjangan'])} mahasiswa")
+            log(f"  Rekap Non-Aktif          : {len(result['nonaktif'])} mahasiswa")
             log(f"Tersimpan di: {output_path}")
             open_file_btn.grid(row=0, column=0)
         elif item[0] == "ok_escalation":
