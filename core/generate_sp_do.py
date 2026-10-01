@@ -4,6 +4,14 @@ mahasiswa non-aktif untuk semester TERBARU, dari data mentah mahasiswa
 aktif, non-aktif, & lulus per semester (format kolom: Nim, Nama, Program
 Studi, Ipk, Total Sks Lulus, dst - hasil export akademik).
 
+File aktif_paths dan nonaktif_paths dipasangkan jadi 1 "semester" lewat
+tahun+term yang terdeteksi dari NAMA FILE-nya masing-masing (lihat
+parse_term), bukan dari urutan argumennya - jadi file aktif & non-aktif
+untuk semester yang sama sekarang HARUS sama-sama mengandung pola tahun+
+term yang sama di nama filenya (mis. keduanya "... Genap 2025-2026 ..."),
+kalau tidak akan dianggap 2 semester terpisah yang masing-masing cuma
+punya salah satu data (aktif tanpa non-aktif, atau sebaliknya).
+
 Aturan (kebijakan kampus):
 - SP Tahap Awal: mahasiswa AKTIF dengan IPK akumulasi < 2.0 pada semester
   itu, DAN semester tempuhnya maksimal 6 (semester 7 ke atas ditangani
