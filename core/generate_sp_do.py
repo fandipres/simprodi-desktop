@@ -138,7 +138,12 @@ def _read_roster(path):
     out = pd.DataFrame({
         "NIM": nim,
         "Nama": df["Nama"].astype(str).str.strip(),
-        "Prodi": df["Program Studi"].astype(str).str.strip(),
+        # Kolom "Program Studi" di file mentah kadang kosong/NaN (filter
+        # ekspornya sendiri sudah per-prodi, jadi kolomnya tidak selalu
+        # ikut terisi) - aplikasi ini memang cuma dipakai 1 program studi
+        # (Teknik Informatika), jadi diisi otomatis saja, bukan dibaca
+        # dari file.
+        "Prodi": "Teknik Informatika",
         "IPK": pd.to_numeric(df["Ipk"], errors="coerce"),
         "SKS Lulus": pd.to_numeric(df["Total Sks Lulus"], errors="coerce"),
     })
