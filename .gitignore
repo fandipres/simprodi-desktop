@@ -18,3 +18,6 @@ Panduan_Setup_SIMPRODI (arsip - sistem web).docx
 
 # Config lokal tool
 .claude/
+
+# Konteks proyek untuk Claude Code (jangan dipublikasikan)
+CLAUDE.md

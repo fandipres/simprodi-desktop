@@ -27,9 +27,23 @@ levelnya = level semester sebelumnya + 1 (mahasiswa baru mulai dari
 SP-1). Level dibatasi maksimal SP-3 - setelah itu status berikutnya
 seharusnya DO/mengundurkan diri, bukan SP-4.
 
+SP Tahap Awal dan SP Tahap Akhir adalah 2 TRACK TERPISAH, masing-masing
+dihitung dari 1 sampai maksimal 3 sendiri-sendiri - riwayat Tahap Awal
+TIDAK dibawa masuk ke Tahap Akhir (mahasiswa yang pernah SP Tahap Awal
+ke-2 lalu baru kena Tahap Akhir, Tahap Akhir-nya tetap mulai dari 1,
+bukan lanjut ke-3). Sheet "SP_Tahap Awal"/"SP_Tahap Akhir" format baru
+sudah otomatis per-track lewat nama sheet-nya; sheet "SP" gabungan
+(format lama, belum dipisah) atau "List Peringatan ..." disambiguasi
+sendiri per kemunculan NIM-nya - semester tempuh mahasiswa itu saat itu
+dihitung dari NIM (2 digit awal = tahun angkatan), lalu <= 6 dianggap
+Tahap Awal, >= 7 dianggap Tahap Akhir (sama seperti aturan cutoff di
+generate_sp_do.py).
+
 Mahasiswa yang levelnya di semester terakhir lebih tinggi dari level
 tertinggi di semester-semester sebelumnya ditandai sebagai "eskalasi".
-DO dianggap level paling tinggi (di atas SP berapa pun).
+DO dianggap level paling tinggi (di atas SP berapa pun) - begitu DO,
+level Tahap Awal MAUPUN Tahap Akhir mahasiswa itu dikunci ke DO (tidak
+ada jalan "bersih" lagi ke salah satu track).
 """
 
 import argparse
@@ -108,8 +122,12 @@ def _get_nim(row):
 def _collect_file_contributions(path, fallback_order):
     """
     Kembalikan list of (sort_key, label, kind, dataframe) dari 1 file -
-    kind "sp" atau "do". Format standar diprioritaskan; kalau tidak ada,
-    coba format lama (semester per sheet, lihat docstring modul).
+    kind "sp_awal"/"sp_akhir" (format baru, per sheet-nya langsung),
+    "sp_legacy" (sheet "SP" gabungan atau "List Peringatan ..." - belum
+    dipisah Awal/Akhir, disambiguasi lewat semester tempuh di
+    compute_levels), atau "do". Format standar diprioritaskan; kalau
+    tidak ada, coba format lama (semester per sheet, lihat docstring
+    modul).
     """
     xls = pd.ExcelFile(path)
     contributions = []
@@ -117,10 +135,10 @@ def _collect_file_contributions(path, fallback_order):
     has_standard = any(_find_sheet(xls, s) for s in SP_SHEETS) or _find_sheet(xls, DO_SHEET)
     if has_standard:
         own_key, own_label = _semester_label(path, fallback_order)
-        for sheet_name in SP_SHEETS:
+        for sheet_name, kind in (("SP_Tahap Awal", "sp_awal"), ("SP_Tahap Akhir", "sp_akhir"), ("SP", "sp_legacy")):
             actual = _find_sheet(xls, sheet_name)
             if actual is not None:
-                contributions.append((own_key, own_label, "sp", pd.read_excel(xls, sheet_name=actual)))
+                contributions.append((own_key, own_label, kind, pd.read_excel(xls, sheet_name=actual)))
         actual_do = _find_sheet(xls, DO_SHEET)
         if actual_do is not None:
             contributions.append((own_key, own_label, "do", pd.read_excel(xls, sheet_name=actual_do)))
@@ -130,30 +148,42 @@ def _collect_file_contributions(path, fallback_order):
         parsed = _parse_legacy_sheet(sheet_name)
         if parsed is None:
             continue
-        sort_key, label, kind = parsed
+        sort_key, label, kind = parsed  # kind "sp" (gabungan, belum dipisah) atau "do"
+        if kind == "sp":
+            kind = "sp_legacy"
         contributions.append((sort_key, label, kind, pd.read_excel(xls, sheet_name=sheet_name)))
 
     return contributions
 
 
 def _blank_presence():
-    return {"nama": "", "prodi": "", "dosen_wali": "", "on_sp": False, "on_do": False}
+    return {
+        "nama": "", "prodi": "", "dosen_wali": "",
+        "on_sp_awal": False, "on_sp_akhir": False, "on_sp_legacy": False, "on_do": False,
+    }
 
 
 def _group_semester_data(file_paths):
-    """Kumpulkan kontribusi semua file jadi dict sort_key -> {label, sp_rows, do_rows}."""
+    """Kumpulkan kontribusi semua file jadi dict sort_key -> {label, sp_awal_rows,
+    sp_akhir_rows, sp_legacy_rows, do_rows}."""
     semester_data = {}
     for i, path in enumerate(file_paths):
         for sort_key, label, kind, df in _collect_file_contributions(path, i):
-            bucket = semester_data.setdefault(sort_key, {"label": label, "sp_rows": [], "do_rows": []})
+            bucket = semester_data.setdefault(sort_key, {
+                "label": label, "sp_awal_rows": [], "sp_akhir_rows": [], "sp_legacy_rows": [], "do_rows": [],
+            })
             bucket[f"{kind}_rows"].append(df)
     return semester_data
 
 
 def _presence_for_semester(bucket):
-    """Bangun dict nim -> presence (nama/prodi/dosen_wali/on_sp/on_do) dari 1 bucket semester."""
+    """Bangun dict nim -> presence (nama/prodi/dosen_wali/on_sp_awal/
+    on_sp_akhir/on_sp_legacy/on_do) dari 1 bucket semester."""
     presence = {}
-    for kind, rows_key in (("sp", "sp_rows"), ("do", "do_rows")):
+    for kind, rows_key in (
+        ("sp_awal", "sp_awal_rows"), ("sp_akhir", "sp_akhir_rows"),
+        ("sp_legacy", "sp_legacy_rows"), ("do", "do_rows"),
+    ):
         for df in bucket[rows_key]:
             for _, row in df.iterrows():
                 nim = _get_nim(row)
@@ -167,29 +197,68 @@ def _presence_for_semester(bucket):
     return presence
 
 
+# Harus sama dengan AWAL_MAX_SEMESTER di generate_sp_do.py - diduplikasi
+# di sini (bukan di-import) supaya tidak terjadi circular import (modul
+# itu sendiri yang mengimpor eskalasi_sp).
+_AWAL_MAX_SEMESTER = 6
+
+
+def _enrollment_year(nim):
+    return 2000 + int(nim[:2])
+
+
+def _semester_number_at(nim, sort_key):
+    """Semester tempuh NIM pada sort_key (year_start, 0/1 Ganjil/Genap) -
+    None kalau sort_key-nya fallback (nama file tidak mengandung
+    semester, year_start == 9999, jadi tidak bisa dihitung sungguhan)."""
+    year_start, term_idx = sort_key
+    if year_start == 9999:
+        return None
+    enroll_year = _enrollment_year(nim)
+    return (year_start - enroll_year) * 2 + (1 if term_idx == 0 else 2)
+
+
 def compute_levels(file_paths):
     """
     Baca file rekap SP/DO (format standar/lama) dan kembalikan
-    (running_level, student_info, semester_labels, last_sp_key) hasil
-    akhir setelah diproses berurutan - dipakai untuk menyambung riwayat
-    SP sebelum data aktif/non-aktif mentah tersedia (lihat
-    generate_sp_do.py).
+    (awal_level, akhir_level, student_info, semester_labels,
+    last_akhir_key) hasil akhir setelah diproses berurutan - dipakai
+    untuk menyambung riwayat SP sebelum data aktif/non-aktif mentah
+    tersedia (lihat generate_sp_do.py).
 
-    running_level: {nim: level SP terakhir (0..MAX_SP_LEVEL) atau DO_RANK}
+    awal_level, akhir_level: {nim: level SP terakhir di track itu
+        (0..MAX_SP_LEVEL) atau DO_RANK} - 2 TRACK TERPISAH, Tahap Akhir
+        TIDAK melanjutkan dari Tahap Awal (mulai dari 0 sendiri). Begitu
+        DO, nim itu di set DO_RANK di KEDUA track (dikunci, jalur ke
+        track manapun selanjutnya juga dianggap DO).
     student_info: {nim: {nama, prodi, dosen_wali}}
     semester_labels: label semester terurut kronologis yang terbaca.
-    last_sp_key: {nim: sort_key semester terakhir muncul di SP/DO} -
-        dipakai generate_sp_do.py untuk menyambung masa berlaku SP
-        Tahap Akhir (supaya mahasiswa yang kena Tahap Akhir di semester
-        yang datanya berasal dari rekap tidak dianggap "belum pernah
-        kena" begitu masuk ke semester yang diproses live).
+    last_akhir_key: {nim: sort_key semester terakhir muncul di SP Tahap
+        Akhir atau DO} - dipakai generate_sp_do.py untuk menyambung masa
+        berlaku SP Tahap Akhir (supaya mahasiswa yang kena Tahap Akhir
+        di semester yang datanya berasal dari rekap tidak dianggap
+        "belum pernah kena" begitu masuk ke semester yang diproses
+        live). Kemunculan di Tahap Awal TIDAK ikut mengisi ini, karena
+        masa berlaku itu konsep khusus Tahap Akhir.
     """
     semester_data = _group_semester_data(file_paths)
     ordered_keys = sorted(semester_data.keys())
 
-    running_level = {}
+    awal_level = {}
+    akhir_level = {}
     student_info = {}
-    last_sp_key = {}
+    last_akhir_key = {}
+
+    def _mark_do(nim):
+        awal_level[nim] = DO_RANK
+        akhir_level[nim] = DO_RANK
+
+    def _bump_awal(nim):
+        awal_level[nim] = min(awal_level.get(nim, 0) + 1, MAX_SP_LEVEL)
+
+    def _bump_akhir(nim, key):
+        akhir_level[nim] = min(akhir_level.get(nim, 0) + 1, MAX_SP_LEVEL)
+        last_akhir_key[nim] = key
 
     for key in ordered_keys:
         presence = _presence_for_semester(semester_data[key])
@@ -198,15 +267,32 @@ def compute_levels(file_paths):
             for field in ("nama", "prodi", "dosen_wali"):
                 if p[field]:
                     info[field] = p[field]
+
             if p["on_do"]:
-                running_level[nim] = DO_RANK
-                last_sp_key[nim] = key
-            elif p["on_sp"]:
-                running_level[nim] = min(running_level.get(nim, 0) + 1, MAX_SP_LEVEL)
-                last_sp_key[nim] = key
+                _mark_do(nim)
+                last_akhir_key[nim] = key
+                continue
+            if p["on_sp_awal"]:
+                _bump_awal(nim)
+            if p["on_sp_akhir"]:
+                _bump_akhir(nim, key)
+            if p["on_sp_legacy"]:
+                # Sheet "SP"/"List Peringatan ..." lama belum dipisah
+                # Awal/Akhir - tentukan sendiri dari semester tempuh NIM
+                # saat itu (<=6 -> Awal, >=7 -> Akhir), sama seperti
+                # cutoff AWAL_MAX_SEMESTER di generate_sp_do.py. Kalau
+                # semester-nya sendiri tidak bisa dihitung (nama file
+                # tidak mengandung pola semester), default ke Akhir -
+                # kasus langka, dan Akhir tidak punya aturan cutoff
+                # semester seperti Awal jadi lebih aman ditebak di situ.
+                sem_num = _semester_number_at(nim, key)
+                if sem_num is not None and sem_num <= _AWAL_MAX_SEMESTER:
+                    _bump_awal(nim)
+                else:
+                    _bump_akhir(nim, key)
 
     semester_labels = [semester_data[key]["label"] for key in ordered_keys]
-    return running_level, student_info, semester_labels, last_sp_key
+    return awal_level, akhir_level, student_info, semester_labels, last_akhir_key
 
 
 def semester_counts(file_paths):
@@ -220,7 +306,8 @@ def semester_counts(file_paths):
     semester_data = _group_semester_data(file_paths)
     counts = {}
     for bucket in semester_data.values():
-        sp_nims = {nim for df in bucket["sp_rows"] for nim in df.apply(_get_nim, axis=1) if nim is not None}
+        sp_dfs = bucket["sp_awal_rows"] + bucket["sp_akhir_rows"] + bucket["sp_legacy_rows"]
+        sp_nims = {nim for df in sp_dfs for nim in df.apply(_get_nim, axis=1) if nim is not None}
         do_nims = {nim for df in bucket["do_rows"] for nim in df.apply(_get_nim, axis=1) if nim is not None}
         counts[bucket["label"]] = {"sp": len(sp_nims), "do": len(do_nims)}
     return counts
@@ -257,9 +344,17 @@ def find_escalations(file_paths):
                 if p[field]:
                     info[field] = p[field]
 
+            # Catatan: find_escalations() ini sengaja TIDAK ikut dipisah
+            # jadi track Awal/Akhir seperti compute_levels() - tabel
+            # eskalasi di sini masih 1 ladder gabungan per semester
+            # (on_sp_awal/on_sp_akhir/on_sp_legacy disamakan jadi "on_sp"
+            # generik), karena fiturnya murni menampilkan histori level
+            # per semester (bukan menyambung ke proses semester baru),
+            # dan 1 semester cuma mungkin salah satu track saja (lihat
+            # catatan mutual-exclusivity di generate_sp_do.py).
             if p["on_do"]:
                 level_rank, level_label = DO_RANK, "DO"
-            elif p["on_sp"]:
+            elif p["on_sp_awal"] or p["on_sp_akhir"] or p["on_sp_legacy"]:
                 level_rank = min(running_level.get(nim, 0) + 1, MAX_SP_LEVEL)
                 level_label = f"SP-{level_rank}"
             else:

@@ -13,10 +13,11 @@ kalau tidak akan dianggap 2 semester terpisah yang masing-masing cuma
 punya salah satu data (aktif tanpa non-aktif, atau sebaliknya).
 
 Aturan (kebijakan kampus):
-- SP Tahap Awal: mahasiswa AKTIF dengan IPK akumulasi < 2.0 pada semester
-  itu, DAN semester tempuhnya maksimal 6 (semester 7 ke atas ditangani
-  lewat SP Tahap Akhir saja, bukan Tahap Awal lagi). Dicek tiap semester
-  secara independen (tidak ada masa berlaku).
+- SP Tahap Awal: mahasiswa aktif ATAU non-aktif dengan IPK akumulasi < 2.0
+  pada semester itu, DAN semester tempuhnya maksimal 6 (semester 7 ke
+  atas ditangani lewat SP Tahap Akhir saja, bukan Tahap Awal lagi).
+  Dicek tiap semester secara independen (tidak ada masa berlaku) - beda
+  dari Tahap Akhir yang punya masa berlaku 2 semester.
 - SP Tahap Akhir: mahasiswa aktif ATAU non-aktif yang belum lulus (masih
   ada di salah satu roster, dan TIDAK ada di daftar lulus semester itu)
   begitu semester tempuhnya mencapai 8 atau lebih. Checkpoint berikutnya
@@ -29,22 +30,34 @@ Aturan (kebijakan kampus):
   mahasiswa yang sudah lulus semester itu dari SP Tahap Awal maupun
   Akhir - export "aktif" kadang masih memuat mahasiswa yang baru saja
   lulus semester itu juga.
-- "SP ke-" dihitung sendiri (bukan input manual): tiap kali seorang
-  mahasiswa masuk salah satu daftar SP (Awal atau Akhir) di suatu
-  semester, levelnya = level SP terakhir dia + 1, maksimal SP-3.
+- "SP ke-" dihitung sendiri (bukan input manual), dan Tahap Awal/Tahap
+  Akhir adalah 2 TRACK TERPISAH - masing-masing mulai dari 1 dan
+  maksimal SP-3 SENDIRI-SENDIRI, TIDAK kumulatif satu sama lain. Mis.
+  mahasiswa yang pernah SP Tahap Awal ke-2, begitu nanti kena SP Tahap
+  Akhir (karena tidak lulus-lulus), Tahap Akhir-nya tetap mulai dari
+  ke-1, bukan lanjut ke-3 - riwayat Tahap Awal tidak dibawa masuk ke
+  Tahap Akhir.
 - Rekap Non-Aktif: SEMUA mahasiswa yang masih non-aktif di semester
   terbaru yang tersedia (streak >= 1, tanpa batas minimum), disertai
   jumlah semester non-aktif berturut-turut sampai saat itu dan semester
   tempuhnya saat itu - kolom semester tempuh ini membantu memilah mana
   yang sudah jadi tanggung jawab prodi (semester 9 ke atas, sudah lewat
   masa studi normal) dari yang masih di semester awal.
-- DO: dipicu salah satu dari 2 kondisi (mana yang lebih dulu terjadi) -
-  (a) mahasiswa yang SUDAH berada di level SP-3 (baik dari riwayat SP
-  Tahap Awal maupun SP Tahap Akhir) dan kena checkpoint SP lagi (Tahap
-  Awal atau Tahap Akhir, sesuai aturan di atas) - alih-alih naik ke
-  "SP-4" yang tidak ada, mahasiswa itu masuk sheet "DO"; atau (b)
-  mahasiswa aktif/non-aktif (dan belum lulus) yang semester tempuhnya
-  sudah mencapai 14 atau lebih, terlepas dari status SP-nya (backstop).
+- DO: dipicu salah satu dari 3 kondisi (mana yang lebih dulu terjadi) -
+  (a) mahasiswa yang SUDAH di SP Tahap Awal ke-3 dan kena checkpoint
+  Tahap Awal LAGI - alih-alih naik ke "SP Tahap Awal ke-4" yang tidak
+  ada, masuk sheet "DO"; (b) mahasiswa yang SUDAH di SP Tahap Akhir
+  ke-3 dan kena checkpoint Tahap Akhir LAGI - sama, alih-alih "SP Tahap
+  Akhir ke-4", masuk "DO" (dicek independen dari track Tahap Awal -
+  lihat catatan 2-track di atas); atau (c) mahasiswa aktif/non-aktif
+  (dan belum lulus) yang semester tempuhnya sudah mencapai 14 atau
+  lebih, terlepas dari status SP di track manapun (backstop). Begitu
+  DO (dari jalur manapun), kedua track (Awal & Akhir) dikunci - tidak
+  ada "jalan bersih" lagi buat mahasiswa itu di track manapun.
+  Satu NIM GARANSI cuma masuk salah satu sheet SP_Tahap Awal/SP_Tahap
+  Akhir/DO per semester, tidak pernah dua-duanya - begitu kondisi (c)
+  juga terpenuhi di semester yang sama dengan checkpoint Tahap Akhir,
+  langsung diarahkan ke DO alih-alih dibuatkan baris SP dulu.
 
 Opsional: file rekap SP/DO semester-semester SEBELUM data aktif/non-
 aktif tersedia (format standar maupun lama - lihat eskalasi_sp.py) bisa
@@ -201,6 +214,27 @@ def _is_escalation(prev_level, new_level):
     return prev_level > 0 and new_level > prev_level
 
 
+_DO_SUMBER_TRACK = {
+    "Tahap Awal": "SP Tahap Awal",
+    "Tahap Akhir": "SP Tahap Akhir",
+    # Backstop semester>=14 pakai angka dari akhir_level (lihat generate())
+    # - secara waktu selalu di wilayah Tahap Akhir, jadi dilabeli sama.
+    "semester": "SP Tahap Akhir",
+}
+
+
+def _do_eskalasi_note(sumber, prev_level):
+    """Khusus kolom Eskalasi di sheet DO - beda dari _eskalasi_note
+    generik karena sheet "DO" sendiri tidak punya kolom track seperti
+    SP_Tahap Awal/SP_Tahap Akhir, jadi perlu disebutkan eksplisit DO
+    ini eskalasi dari track SP Tahap Awal atau SP Tahap Akhir."""
+    if prev_level >= MAX_SP_LEVEL + 1:
+        return "Tetap DO"
+    if prev_level == 0:
+        return "Baru (DO)"
+    return f"{_DO_SUMBER_TRACK[sumber]}-{prev_level} -> DO"
+
+
 def _sp_row(row, nim, semester_number, level, status, prev_level=None):
     result = {
         "NIM": nim,
@@ -219,7 +253,7 @@ def _sp_row(row, nim, semester_number, level, status, prev_level=None):
 
 def _do_row(row, nim, semester_number, sumber, status, prev_level=None):
     if sumber == "semester":
-        keterangan = f"Sudah memasuki semester {semester_number} tanpa lulus"
+        keterangan = "Melewati Masa Studi"
     else:
         keterangan = f"Sudah SP-3 (dari SP {sumber}), belum lulus di semester {semester_number}"
     result = {
@@ -233,7 +267,7 @@ def _do_row(row, nim, semester_number, sumber, status, prev_level=None):
         "Status": status,
     }
     if prev_level is not None:
-        result["Eskalasi"] = _eskalasi_note(prev_level, MAX_SP_LEVEL + 1)
+        result["Eskalasi"] = _do_eskalasi_note(sumber, prev_level)
     return result
 
 
@@ -259,18 +293,19 @@ def generate(aktif_paths, nonaktif_paths, lulus_paths=(), recap_paths=()):
     if has_eskalasi:
         from core import eskalasi_sp
 
-        running_level, _recap_info, recap_labels, _last_sp_key = eskalasi_sp.compute_levels(list(recap_paths))
+        awal_level, akhir_level, _recap_info, recap_labels, _last_akhir_key = eskalasi_sp.compute_levels(list(recap_paths))
         # Sambungkan masa berlaku Tahap Akhir dari rekap juga - supaya
         # mahasiswa yang kena Tahap Akhir di semester yang datanya
         # berasal dari rekap tidak dianggap "belum pernah kena" begitu
         # masuk ke semester yang diproses live (lihat catatan di
         # eskalasi_sp.compute_levels).
         akhir_last_hit = {
-            nim: key[0] * 2 + key[1] for nim, key in _last_sp_key.items() if key[0] != 9999
+            nim: key[0] * 2 + key[1] for nim, key in _last_akhir_key.items() if key[0] != 9999
         }
         recap_counts = eskalasi_sp.semester_counts(list(recap_paths))
     else:
-        running_level = {}    # nim -> level SP terakhir (0 kalau belum pernah)
+        awal_level = {}       # nim -> level SP Tahap Awal terakhir (0 kalau belum pernah)
+        akhir_level = {}      # nim -> level SP Tahap Akhir terakhir (0 kalau belum pernah) - TERPISAH dari awal_level
         akhir_last_hit = {}   # nim -> sort index semester terakhir kena Tahap Akhir
         recap_counts = {}     # label -> {"sp": ..., "do": ...} (jumlah unik NIM di file rekap)
 
@@ -331,21 +366,43 @@ def generate(aktif_paths, nonaktif_paths, lulus_paths=(), recap_paths=()):
 
         do_rows, do_eskalasi, do_nims = [], [], set()
 
+        def _lock_do(nim):
+            """Begitu DO (dari jalur manapun), kunci KEDUA track (Awal & Akhir)
+            ke DO_RANK - supaya tidak ada "jalan bersih" lagi ke track
+            manapun buat mahasiswa ini di semester-semester berikutnya."""
+            awal_level[nim] = MAX_SP_LEVEL + 1
+            akhir_level[nim] = MAX_SP_LEVEL + 1
+
+        def _backstop_do(row, nim, semester_number, prev_level):
+            """DO langsung tanpa cek level SP - dipakai baik dari dalam loop
+            Tahap Akhir (supaya tidak keduluan dibuat baris SP dulu) maupun
+            dari loop backstop terpisah di bawah (buat yang di-exempt masa
+            berlaku Tahap Akhir tapi tetap kena semester>=14)."""
+            status = status_map.get(nim, "Aktif")
+            do_row = _do_row(row, nim, semester_number, "semester", status, prev_level if has_eskalasi else None)
+            do_rows.append(do_row)
+            do_nims.add(nim)
+            _lock_do(nim)
+            if has_eskalasi and _is_escalation(prev_level, MAX_SP_LEVEL + 1):
+                do_eskalasi.append(do_row)
+
         def _maybe_do(row, nim, semester_number, sumber, prev_level):
-            """Kalau prev_level sudah SP-3, ini jadi DO (bukan naik ke SP-4 yang tidak ada)."""
+            """Kalau prev_level (level TRACK itu sendiri - Awal atau Akhir,
+            lihat pemanggilnya) sudah SP-3, ini jadi DO (bukan naik ke
+            SP-4 yang tidak ada)."""
             if prev_level < MAX_SP_LEVEL:
                 return False
             status = status_map.get(nim, "Aktif")
             do_row = _do_row(row, nim, semester_number, sumber, status, prev_level if has_eskalasi else None)
             do_rows.append(do_row)
             do_nims.add(nim)
-            running_level[nim] = MAX_SP_LEVEL + 1
+            _lock_do(nim)
             if has_eskalasi and _is_escalation(prev_level, MAX_SP_LEVEL + 1):
                 do_eskalasi.append(do_row)
             return True
 
         awal_rows, awal_eskalasi = [], []
-        for _, row in aktif_df.iterrows():
+        for _, row in combined_df.iterrows():
             nim = row["NIM"]
             if nim in lulus_nims:
                 continue  # sudah lulus semester ini, bukan kandidat SP
@@ -353,12 +410,13 @@ def generate(aktif_paths, nonaktif_paths, lulus_paths=(), recap_paths=()):
             if semester_number > AWAL_MAX_SEMESTER:
                 continue  # semester 7 ke atas ditangani lewat Tahap Akhir, bukan Tahap Awal
             if pd.notna(row["IPK"]) and row["IPK"] < 2.0:
-                prev_level = running_level.get(nim, 0)
+                prev_level = awal_level.get(nim, 0)
                 if _maybe_do(row, nim, semester_number, "Tahap Awal", prev_level):
                     continue
                 level = prev_level + 1
-                running_level[nim] = level
-                sp_row = _sp_row(row, nim, semester_number, level, "Aktif", prev_level if has_eskalasi else None)
+                awal_level[nim] = level
+                status = status_map.get(nim, "Aktif")
+                sp_row = _sp_row(row, nim, semester_number, level, status, prev_level if has_eskalasi else None)
                 awal_rows.append(sp_row)
                 if has_eskalasi and _is_escalation(prev_level, level):
                     awal_eskalasi.append(sp_row)
@@ -375,11 +433,19 @@ def generate(aktif_paths, nonaktif_paths, lulus_paths=(), recap_paths=()):
             if last_hit is not None and sort_index - last_hit < AKHIR_EXEMPT_GAP:
                 continue  # masih dalam masa berlaku SP Tahap Akhir sebelumnya
             akhir_last_hit[nim] = sort_index
-            prev_level = running_level.get(nim, 0)
+            prev_level = akhir_level.get(nim, 0)
             if _maybe_do(row, nim, semester_number, "Tahap Akhir", prev_level):
                 continue
+            if semester_number >= DO_MIN_SEMESTER:
+                # Backstop semester kena di semester yang sama - langsung DO
+                # di sini juga (bukan dibuat baris SP dulu), supaya 1 NIM
+                # tidak pernah muncul di SP_Tahap Akhir DAN DO sekaligus
+                # untuk semester yang sama (tidak mungkin keduanya kena
+                # berbarengan).
+                _backstop_do(row, nim, semester_number, prev_level)
+                continue
             level = prev_level + 1
-            running_level[nim] = level
+            akhir_level[nim] = level
             status = status_map.get(nim, "Aktif")
             sp_row = _sp_row(row, nim, semester_number, level, status, prev_level if has_eskalasi else None)
             akhir_rows.append(sp_row)
@@ -387,21 +453,19 @@ def generate(aktif_paths, nonaktif_paths, lulus_paths=(), recap_paths=()):
                 akhir_eskalasi.append(sp_row)
 
         # DO backstop: semester tempuh sudah >= 14, terlepas dari status SP,
-        # asal belum ke-DO-kan lewat aturan SP-3 di atas semester ini.
+        # asal belum ke-DO-kan lewat aturan SP-3 di atas semester ini. Yang
+        # lolos loop Tahap Akhir di atas (dan bukan exempt masa berlaku)
+        # sudah ditangani langsung di situ - jadi di sini cuma menjaring
+        # yang EXEMPT masa berlaku Tahap Akhir (makanya backstop ini TIDAK
+        # ikut cek akhir_last_hit/AKHIR_EXEMPT_GAP - unconditional).
         for _, row in combined_df.iterrows():
             nim = row["NIM"]
             if nim in lulus_nims or nim in do_nims:
                 continue
             semester_number = _semester_number(nim, sem["year_start"], sem["term"])
             if semester_number >= DO_MIN_SEMESTER:
-                prev_level = running_level.get(nim, 0)
-                status = status_map.get(nim, "Aktif")
-                do_row = _do_row(row, nim, semester_number, "semester", status, prev_level if has_eskalasi else None)
-                do_rows.append(do_row)
-                do_nims.add(nim)
-                running_level[nim] = MAX_SP_LEVEL + 1
-                if has_eskalasi and _is_escalation(prev_level, MAX_SP_LEVEL + 1):
-                    do_eskalasi.append(do_row)
+                prev_level = akhir_level.get(nim, 0)
+                _backstop_do(row, nim, semester_number, prev_level)
 
         summary_entry["sp"] = len(awal_rows) + len(akhir_rows)
         summary_entry["do"] = len(do_rows)
